@@ -134,4 +134,4 @@ jobs:
           body: |
             HomeList Android update (`${{ steps.build.outputs.signed_mode }}` signed).
 
-            Install on family phones by tapping the `.apk` asset below or automatically via Obtainium pointed at `https://github.com/bobcatchris15-eng/HomeList`.
+            Install on family phones by tapping the `.apk` asset below or automatically via Obtainium pointed at `https://github.com/bobcatchris15-eng/HomeList_updates`.

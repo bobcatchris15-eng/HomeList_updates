@@ -40,7 +40,7 @@ data class GitHubReleaseDto(
 )
 
 object AppUpdateChecker {
-    const val DEFAULT_GITHUB_REPO = "bobcatchris15-eng/HomeList"
+    const val DEFAULT_GITHUB_REPO = "bobcatchris15-eng/HomeList_updates"
     const val DEFAULT_REPO_URL = "https://github.com/$DEFAULT_GITHUB_REPO"
     const val DEFAULT_RELEASES_URL = "$DEFAULT_REPO_URL/releases/latest"
 

@@ -37,7 +37,7 @@ abstract class HomeListDatabase : RoomDatabase() {
         private val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
-                    "ALTER TABLE node_config ADD COLUMN updateReleaseUrl TEXT NOT NULL DEFAULT 'https://github.com/bobcatchris15-eng/HomeList/releases/latest'"
+                    "ALTER TABLE node_config ADD COLUMN updateReleaseUrl TEXT NOT NULL DEFAULT 'https://github.com/bobcatchris15-eng/HomeList_updates/releases/latest'"
                 )
                 db.execSQL(
                     "ALTER TABLE mesh_peers ADD COLUMN appVersionCode INTEGER NOT NULL DEFAULT 1"
@@ -85,7 +85,13 @@ abstract class HomeListDatabase : RoomDatabase() {
                         singletonId, nodeId, householdId, householdName, pairingCode,
                         selfMemberId, selfRole, deviceType, isFounder, listenPort,
                         googleCalendarId, googleCalendarName, icsFeedUrl,
-                        updateReleaseUrl, darkTheme, lastSyncedAt
+                        CASE
+                            WHEN updateReleaseUrl = 'https://github.com/bobcatchris15-eng/HomeList/releases/latest'
+                              OR updateReleaseUrl = 'https://github.com/bobcatchris15-eng/HomeList'
+                            THEN 'https://github.com/bobcatchris15-eng/HomeList_updates/releases/latest'
+                            ELSE updateReleaseUrl
+                        END,
+                        darkTheme, lastSyncedAt
                     FROM `node_config`
                     """.trimIndent()
                 )

@@ -141,7 +141,7 @@ data class NodeConfigEntity(
     val googleCalendarId: Long = -1L,
     val googleCalendarName: String = "",
     val icsFeedUrl: String = "",
-    val updateReleaseUrl: String = "https://github.com/bobcatchris15-eng/HomeList/releases/latest",
+    val updateReleaseUrl: String = "https://github.com/bobcatchris15-eng/HomeList_updates/releases/latest",
     val darkTheme: Boolean = false,
     val lastSyncedAt: Long = 0L
 )
