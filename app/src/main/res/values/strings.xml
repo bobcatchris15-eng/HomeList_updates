@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">HomeList</string>
+    <string name="onboarding_tagline">Private family chores, smart reminders, and shared schedules—synced directly across your phones.</string>
+    <string name="found_grouping">Found a Family</string>
+    <string name="join_grouping">Join a Family</string>
+    <string name="wall_display">Wall Display</string>
+    <string name="sync_mesh_now">Sync Mesh Now</string>
+    <string name="share_invite_subject">Join our HomeList family</string>
+    <string name="notification_channel_reminders_name">HomeList Reminders</string>
+    <string name="notification_channel_reminders_desc">Scheduled time and location reminders for chores and family tasks</string>
+    <string name="notification_channel_nudges_name">Family Nudges</string>
+    <string name="notification_channel_nudges_desc">Friendly chore reminders sent by parents over the household mesh</string>
+</resources>

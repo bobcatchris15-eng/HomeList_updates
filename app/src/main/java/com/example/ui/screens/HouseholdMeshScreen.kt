@@ -1,0 +1,721 @@
+package com.example.ui.screens
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.outlined.Logout
+import androidx.compose.material.icons.outlined.VpnKey
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import com.example.BuildConfig
+import com.example.data.DateStreakUtils
+import com.example.data.DeviceType
+import com.example.data.MemberRole
+import com.example.ui.HomeListUiState
+import com.example.ui.components.MemberAvatarBadge
+import com.example.ui.components.iconForDeviceType
+import com.example.updates.AppUpdateChecker
+
+@Composable
+fun HouseholdMeshScreen(
+    state: HomeListUiState,
+    onSyncMeshNow: () -> Unit,
+    onUpdatePrivateCheckIn: (acceptPrivate: Boolean, intervalMinutes: Int) -> Unit,
+    onUpdateCustomPrivateHost: (String) -> Unit,
+    onAddManualMember: (name: String, role: MemberRole, colorKey: String) -> Unit,
+    onCheckForUpdates: () -> Unit,
+    onUpdateReleaseUrl: (String) -> Unit,
+    onToggleDarkTheme: () -> Unit,
+    onLeaveHousehold: () -> Unit,
+    onShowMessage: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val config = state.config ?: return
+    val mesh = state.meshStatus
+
+    var customHostDraft by remember(config.customPrivateHost) { mutableStateOf(config.customPrivateHost) }
+    var releaseUrlDraft by remember(config.updateReleaseUrl) {
+        mutableStateOf(config.updateReleaseUrl.ifBlank { AppUpdateChecker.DEFAULT_RELEASES_URL })
+    }
+    var showAddMemberDialog by remember { mutableStateOf(false) }
+    var showLeaveConfirmDialog by remember { mutableStateOf(false) }
+
+    val primaryHost = mesh.tailscaleIp.ifBlank {
+        config.customPrivateHost.ifBlank { mesh.lanIp }
+    }
+    val pairingLink = if (primaryHost.isNotBlank()) {
+        "homelist://$primaryHost:${mesh.listenPort}?code=${config.pairingCode}"
+    } else {
+        config.pairingCode
+    }
+
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        // Pairing Code & Mesh Identity Card
+        item(key = "pairing_card") {
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(config.householdName, style = MaterialTheme.typography.headlineSmall)
+                            Text(
+                                text = if (config.isFounder) "Founder Node • Pure Peer Mesh" else "Family Mesh Peer",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    Icons.Outlined.VpnKey,
+                                    contentDescription = "Pairing code",
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = config.pairingCode,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                    AddressRow(
+                        label = "Home Wi-Fi IP",
+                        value = if (mesh.lanIp.isNotBlank()) "${mesh.lanIp}:${mesh.listenPort}" else "Connect to Wi-Fi"
+                    )
+                    AddressRow(
+                        label = "Tailscale Virtual IP",
+                        value = if (mesh.tailscaleIp.isNotBlank()) "${mesh.tailscaleIp}:${mesh.listenPort}" else "Not detected (optional)"
+                    )
+                    if (mesh.lanIp.isNotBlank() || mesh.tailscaleIp.isNotBlank()) {
+                        val boardHost = mesh.lanIp.ifBlank { mesh.tailscaleIp }
+                        AddressRow(
+                            label = "Pi / Browser Wall URL",
+                            value = "http://$boardHost:${mesh.listenPort}"
+                        )
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                clipboard?.setPrimaryClip(ClipData.newPlainText("HomeList Invite", pairingLink))
+                                onShowMessage("Copied invite link & pairing code")
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("copy_pairing_code_button")
+                        ) {
+                            Icon(Icons.Filled.ContentCopy, null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Copy Invite")
+                        }
+                        Button(
+                            onClick = {
+                                val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_SUBJECT, "Join ${config.householdName} on HomeList")
+                                    putExtra(
+                                        Intent.EXTRA_TEXT,
+                                        "Join ${config.householdName} in HomeList!\nPairing code: ${config.pairingCode}\nLink: $pairingLink"
+                                    )
+                                }
+                                context.startActivity(Intent.createChooser(sendIntent, "Share HomeList Invite"))
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("share_pairing_code_button")
+                        ) {
+                            Icon(Icons.Filled.Share, null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Share")
+                        }
+                    }
+                }
+            }
+        }
+
+        // Founder Private Check-In Timer & Tailscale Host Card
+        item(key = "founder_timer_card") {
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text("Private Check-In Timer (Tailscale / Virtual)", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        text = if (config.isFounder) {
+                            "Accept encrypted private check-ins from family phones away from Wi-Fi using your saved Tailscale IP or MagicDNS address."
+                        } else {
+                            "Automatically dial the Founder phone's saved private address from your Peer Address Book on this schedule."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (config.isFounder) "Accept inbound private check-ins" else "Allow private peer connections",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Switch(
+                            checked = config.acceptPrivateCheckIns,
+                            onCheckedChange = { enabled ->
+                                onUpdatePrivateCheckIn(enabled, config.checkInIntervalMinutes)
+                            },
+                            modifier = Modifier.testTag("accept_private_checkins_switch")
+                        )
+                    }
+
+                    Text("Check-in interval", style = MaterialTheme.typography.labelLarge)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(15 to "15m", 30 to "30m", 60 to "60m", 0 to "Manual").forEach { (mins, label) ->
+                            FilterChip(
+                                selected = config.checkInIntervalMinutes == mins,
+                                onClick = { onUpdatePrivateCheckIn(config.acceptPrivateCheckIns, mins) },
+                                label = { Text(label) },
+                                modifier = Modifier.testTag("timer_chip_$mins")
+                            )
+                        }
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = customHostDraft,
+                            onValueChange = { customHostDraft = it },
+                            label = { Text("Optional MagicDNS / Tailscale hostname") },
+                            placeholder = { Text("e.g., phone.tailnet.ts.net") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(
+                            onClick = { onUpdateCustomPrivateHost(customHostDraft) },
+                            modifier = Modifier.testTag("save_custom_host_button")
+                        ) {
+                            Text("Save")
+                        }
+                    }
+                }
+            }
+        }
+
+        // Synced Peer Address Book (Mesh Directory)
+        item(key = "peer_book_header") {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text("Peer Address Book (${state.peers.size})", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        text = mesh.lastSyncMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Button(
+                    onClick = onSyncMeshNow,
+                    enabled = !mesh.isSyncing,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.testTag("sync_mesh_now_button")
+                ) {
+                    Icon(Icons.Filled.Sync, null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (mesh.isSyncing) "Syncing..." else "Sync Mesh")
+                }
+            }
+        }
+
+        items(state.peers, key = { it.nodeId }) { peer ->
+            val isSelf = peer.nodeId == config.nodeId
+            val devType = DeviceType.fromString(peer.deviceType)
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(
+                        imageVector = iconForDeviceType(peer.deviceType),
+                        contentDescription = devType.label,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(26.dp)
+                    )
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = peer.displayName + if (isSelf) " (This device)" else "",
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            if (peer.isFounder) {
+                                Icon(
+                                    imageVector = Icons.Filled.Star,
+                                    contentDescription = "Founder node",
+                                    tint = MaterialTheme.colorScheme.tertiary,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
+                        }
+                        Text(
+                            text = "${MemberRole.fromString(peer.role).label} • ${devType.label} • v${peer.appVersionName.ifBlank { "1.0" }} • Seen ${DateStreakUtils.relativeTimeLabel(peer.lastSeenAt)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        val addrSummary = listOfNotNull(
+                            peer.lanIp.takeIf { it.isNotBlank() }?.let { "Wi-Fi $it" },
+                            peer.tailscaleIp.takeIf { it.isNotBlank() }?.let { "Tailscale $it" },
+                            peer.customPrivateHost.takeIf { it.isNotBlank() }
+                        ).joinToString("  •  ")
+                        if (addrSummary.isNotBlank()) {
+                            Text(
+                                text = addrSummary,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.secondary
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Family Members & Add Member Option
+        item(key = "family_members_card") {
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Family Members", style = MaterialTheme.typography.titleMedium)
+                        if (state.isParent) {
+                            TextButton(
+                                onClick = { showAddMemberDialog = true },
+                                modifier = Modifier.testTag("add_member_button")
+                            ) {
+                                Icon(Icons.Filled.PersonAdd, null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Add Member")
+                            }
+                        }
+                    }
+                    state.members.forEach { member ->
+                        val stats = state.memberStats[member.id]
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                MemberAvatarBadge(
+                                    name = member.displayName,
+                                    colorKey = member.avatarColorKey,
+                                    size = 34.dp
+                                )
+                                Column {
+                                    Text(member.displayName, style = MaterialTheme.typography.titleSmall)
+                                    Text(
+                                        text = MemberRole.fromString(member.role).label,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Text(
+                                text = "${stats?.currentStreak ?: 0}d streak",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.tertiary
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // App Updates (GitHub Releases + Obtainium + Mesh Broadcast)
+        item(key = "app_updates_card") {
+            val update = state.availableUpdate
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.SystemUpdate,
+                                contentDescription = "App updates",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Column {
+                                Text("App Updates (GitHub)", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    text = "Installed: v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        if (update != null) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.secondaryContainer
+                            ) {
+                                Text(
+                                    text = "v${update.versionName} ready",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = "Family phones automatically alert each other when a newer version joins the mesh, or check GitHub Releases directly. Pair with Obtainium for one-tap updates.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = onCheckForUpdates,
+                            enabled = !state.isCheckingUpdate,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("check_updates_button")
+                        ) {
+                            Text(if (state.isCheckingUpdate) "Checking..." else "Check GitHub")
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                val target = update?.downloadUrl ?: releaseUrlDraft
+                                if (!AppUpdateChecker.openUpdateUrl(context, target)) {
+                                    onShowMessage("Enter a valid https:// release URL")
+                                }
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("open_releases_button")
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.OpenInNew, null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(if (update != null) "Get v${update.versionName}" else "Releases")
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            val slug = AppUpdateChecker.extractGitHubRepoSlug(releaseUrlDraft)
+                                ?: AppUpdateChecker.DEFAULT_GITHUB_REPO
+                            val repoUrl = "https://github.com/$slug"
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                            clipboard?.setPrimaryClip(ClipData.newPlainText("HomeList GitHub Repo", repoUrl))
+                            onShowMessage("Copied $repoUrl for Obtainium")
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("copy_obtainium_repo_button")
+                    ) {
+                        Icon(Icons.Filled.ContentCopy, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Copy GitHub Repo URL for Obtainium")
+                    }
+
+                    if (state.isParent) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = releaseUrlDraft,
+                                onValueChange = { releaseUrlDraft = it },
+                                label = { Text("GitHub Releases URL") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(
+                                onClick = { onUpdateReleaseUrl(releaseUrlDraft) },
+                                modifier = Modifier.testTag("save_release_url_button")
+                            ) {
+                                Text("Save")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Appearance & Leave Household
+        item(key = "preferences_card") {
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (state.isDarkTheme) Icons.Filled.DarkMode else Icons.Filled.LightMode,
+                                contentDescription = "Theme mode",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Column {
+                                Text("Evening Dark Mode", style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    text = "Softer dark slate palette for nighttime & wall boards",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Switch(
+                            checked = state.isDarkTheme,
+                            onCheckedChange = { onToggleDarkTheme() },
+                            modifier = Modifier.testTag("dark_theme_switch")
+                        )
+                    }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                    OutlinedButton(
+                        onClick = { showLeaveConfirmDialog = true },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("leave_household_button")
+                    ) {
+                        Icon(Icons.Outlined.Logout, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Leave Family Grouping on This Phone")
+                    }
+                }
+            }
+        }
+    }
+
+    if (showAddMemberDialog) {
+        var name by remember { mutableStateOf("") }
+        var role by remember { mutableStateOf(MemberRole.CHILD) }
+        var color by remember { mutableStateOf("sage") }
+        AlertDialog(
+            onDismissRequest = { showAddMemberDialog = false },
+            title = { Text("Add Family Member") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Add a family member now to start assigning chores before their phone joins the mesh.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = { Text("Name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = role == MemberRole.CHILD,
+                            onClick = { role = MemberRole.CHILD },
+                            label = { Text("Child") }
+                        )
+                        FilterChip(
+                            selected = role == MemberRole.PARENT,
+                            onClick = { role = MemberRole.PARENT },
+                            label = { Text("Parent") }
+                        )
+                    }
+                    ColorPickerRow(selectedKey = color, onSelect = { color = it })
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onAddManualMember(name, role, color)
+                        showAddMemberDialog = false
+                    },
+                    enabled = name.isNotBlank()
+                ) { Text("Add") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddMemberDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showLeaveConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showLeaveConfirmDialog = false },
+            title = { Text("Leave ${config.householdName}?") },
+            text = {
+                Text("This clears HomeList data on this phone only. Other family phones keep their synced copies.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showLeaveConfirmDialog = false
+                        onLeaveHousehold()
+                    }
+                ) { Text("Leave") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLeaveConfirmDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+}
+
+@Composable
+private fun AddressRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
+    }
+}

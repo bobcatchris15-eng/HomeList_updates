@@ -1,0 +1,6 @@
+{
+  "name": "HomeList",
+  "description": "Private pure-mesh family chore, reminder, and calendar organizer for parents and children.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
