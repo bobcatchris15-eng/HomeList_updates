@@ -186,13 +186,6 @@ class MeshNodeServer(
             return
         }
 
-        // Enforce Founder Private Check-In window toggle for non-LAN (Tailscale/private) callers
-        val isLanCaller = NetworkAddressDetector.isLanAddress(remoteIp)
-        if (!isLanCaller && !config.acceptPrivateCheckIns) {
-            writeJson(output, 403, "Forbidden", """{"error":"private_checkins_paused"}""")
-            return
-        }
-
         val bodyText = bodyBytes.toString(StandardCharsets.UTF_8)
         if (bodyText.isNotBlank()) {
             try {

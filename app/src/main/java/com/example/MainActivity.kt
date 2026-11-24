@@ -507,10 +507,6 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
                                         AppTab.HOUSEHOLD -> HouseholdMeshScreen(
                                             state = state,
                                             onSyncMeshNow = { viewModel.syncMeshNow() },
-                                            onUpdatePrivateCheckIn = { accept, mins ->
-                                                viewModel.updatePrivateCheckInSettings(accept, mins)
-                                            },
-                                            onUpdateCustomPrivateHost = { viewModel.updateCustomPrivateHost(it) },
                                             onAddManualMember = { name, role, color ->
                                                 viewModel.addManualMember(name, role, color)
                                             },

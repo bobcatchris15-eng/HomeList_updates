@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         DinnerOptionEntity::class,
         GroceryItemEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class HomeListDatabase : RoomDatabase() {
@@ -48,13 +48,95 @@ abstract class HomeListDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `node_config_new` (
+                        `singletonId` INTEGER NOT NULL,
+                        `nodeId` TEXT NOT NULL,
+                        `householdId` TEXT NOT NULL,
+                        `householdName` TEXT NOT NULL,
+                        `pairingCode` TEXT NOT NULL,
+                        `selfMemberId` TEXT NOT NULL,
+                        `selfRole` TEXT NOT NULL,
+                        `deviceType` TEXT NOT NULL,
+                        `isFounder` INTEGER NOT NULL,
+                        `listenPort` INTEGER NOT NULL,
+                        `googleCalendarId` INTEGER NOT NULL,
+                        `googleCalendarName` TEXT NOT NULL,
+                        `icsFeedUrl` TEXT NOT NULL,
+                        `updateReleaseUrl` TEXT NOT NULL,
+                        `darkTheme` INTEGER NOT NULL,
+                        `lastSyncedAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`singletonId`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO `node_config_new` (
+                        singletonId, nodeId, householdId, householdName, pairingCode,
+                        selfMemberId, selfRole, deviceType, isFounder, listenPort,
+                        googleCalendarId, googleCalendarName, icsFeedUrl,
+                        updateReleaseUrl, darkTheme, lastSyncedAt
+                    )
+                    SELECT
+                        singletonId, nodeId, householdId, householdName, pairingCode,
+                        selfMemberId, selfRole, deviceType, isFounder, listenPort,
+                        googleCalendarId, googleCalendarName, icsFeedUrl,
+                        updateReleaseUrl, darkTheme, lastSyncedAt
+                    FROM `node_config`
+                    """.trimIndent()
+                )
+                db.execSQL("DROP TABLE `node_config`")
+                db.execSQL("ALTER TABLE `node_config_new` RENAME TO `node_config`")
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `mesh_peers_new` (
+                        `nodeId` TEXT NOT NULL,
+                        `memberId` TEXT NOT NULL,
+                        `displayName` TEXT NOT NULL,
+                        `role` TEXT NOT NULL,
+                        `deviceType` TEXT NOT NULL,
+                        `isFounder` INTEGER NOT NULL,
+                        `lanIp` TEXT NOT NULL,
+                        `port` INTEGER NOT NULL,
+                        `appVersionCode` INTEGER NOT NULL,
+                        `appVersionName` TEXT NOT NULL,
+                        `lastSeenAt` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`nodeId`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO `mesh_peers_new` (
+                        nodeId, memberId, displayName, role, deviceType,
+                        isFounder, lanIp, port, appVersionCode, appVersionName,
+                        lastSeenAt, updatedAt
+                    )
+                    SELECT
+                        nodeId, memberId, displayName, role, deviceType,
+                        isFounder, lanIp, port, appVersionCode, appVersionName,
+                        lastSeenAt, updatedAt
+                    FROM `mesh_peers`
+                    """.trimIndent()
+                )
+                db.execSQL("DROP TABLE `mesh_peers`")
+                db.execSQL("ALTER TABLE `mesh_peers_new` RENAME TO `mesh_peers`")
+            }
+        }
+
         fun getInstance(context: Context): HomeListDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext,
                     HomeListDatabase::class.java,
                     "homelist_mesh.db"
-                ).addMigrations(MIGRATION_3_4)
+                ).addMigrations(MIGRATION_3_4, MIGRATION_4_5)
                     .fallbackToDestructiveMigrationFrom(dropAllTables = true, 1, 2)
                     .build()
                     .also { instance = it }

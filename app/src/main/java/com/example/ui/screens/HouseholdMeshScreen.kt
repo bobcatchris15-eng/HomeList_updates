@@ -67,8 +67,6 @@ import com.example.updates.AppUpdateChecker
 fun HouseholdMeshScreen(
     state: HomeListUiState,
     onSyncMeshNow: () -> Unit,
-    onUpdatePrivateCheckIn: (acceptPrivate: Boolean, intervalMinutes: Int) -> Unit,
-    onUpdateCustomPrivateHost: (String) -> Unit,
     onAddManualMember: (name: String, role: MemberRole, colorKey: String) -> Unit,
     onCheckForUpdates: () -> Unit,
     onUpdateReleaseUrl: (String) -> Unit,
@@ -81,18 +79,14 @@ fun HouseholdMeshScreen(
     val config = state.config ?: return
     val mesh = state.meshStatus
 
-    var customHostDraft by remember(config.customPrivateHost) { mutableStateOf(config.customPrivateHost) }
     var releaseUrlDraft by remember(config.updateReleaseUrl) {
         mutableStateOf(config.updateReleaseUrl.ifBlank { AppUpdateChecker.DEFAULT_RELEASES_URL })
     }
     var showAddMemberDialog by remember { mutableStateOf(false) }
     var showLeaveConfirmDialog by remember { mutableStateOf(false) }
 
-    val primaryHost = mesh.tailscaleIp.ifBlank {
-        config.customPrivateHost.ifBlank { mesh.lanIp }
-    }
-    val pairingLink = if (primaryHost.isNotBlank()) {
-        "homelist://$primaryHost:${mesh.listenPort}?code=${config.pairingCode}"
+    val pairingLink = if (mesh.lanIp.isNotBlank()) {
+        "homelist://${mesh.lanIp}:${mesh.listenPort}?code=${config.pairingCode}"
     } else {
         config.pairingCode
     }
@@ -159,15 +153,10 @@ fun HouseholdMeshScreen(
                         label = "Home Wi-Fi IP",
                         value = if (mesh.lanIp.isNotBlank()) "${mesh.lanIp}:${mesh.listenPort}" else "Connect to Wi-Fi"
                     )
-                    AddressRow(
-                        label = "Tailscale Virtual IP",
-                        value = if (mesh.tailscaleIp.isNotBlank()) "${mesh.tailscaleIp}:${mesh.listenPort}" else "Not detected (optional)"
-                    )
-                    if (mesh.lanIp.isNotBlank() || mesh.tailscaleIp.isNotBlank()) {
-                        val boardHost = mesh.lanIp.ifBlank { mesh.tailscaleIp }
+                    if (mesh.lanIp.isNotBlank()) {
                         AddressRow(
                             label = "Pi / Browser Wall URL",
-                            value = "http://$boardHost:${mesh.listenPort}"
+                            value = "http://${mesh.lanIp}:${mesh.listenPort}"
                         )
                     }
 
@@ -213,84 +202,7 @@ fun HouseholdMeshScreen(
             }
         }
 
-        // Founder Private Check-In Timer & Tailscale Host Card
-        item(key = "founder_timer_card") {
-            Surface(
-                shape = RoundedCornerShape(22.dp),
-                color = MaterialTheme.colorScheme.surface,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text("Private Check-In Timer (Tailscale / Virtual)", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        text = if (config.isFounder) {
-                            "Accept encrypted private check-ins from family phones away from Wi-Fi using your saved Tailscale IP or MagicDNS address."
-                        } else {
-                            "Automatically dial the Founder phone's saved private address from your Peer Address Book on this schedule."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = if (config.isFounder) "Accept inbound private check-ins" else "Allow private peer connections",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Switch(
-                            checked = config.acceptPrivateCheckIns,
-                            onCheckedChange = { enabled ->
-                                onUpdatePrivateCheckIn(enabled, config.checkInIntervalMinutes)
-                            },
-                            modifier = Modifier.testTag("accept_private_checkins_switch")
-                        )
-                    }
-
-                    Text("Check-in interval", style = MaterialTheme.typography.labelLarge)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf(15 to "15m", 30 to "30m", 60 to "60m", 0 to "Manual").forEach { (mins, label) ->
-                            FilterChip(
-                                selected = config.checkInIntervalMinutes == mins,
-                                onClick = { onUpdatePrivateCheckIn(config.acceptPrivateCheckIns, mins) },
-                                label = { Text(label) },
-                                modifier = Modifier.testTag("timer_chip_$mins")
-                            )
-                        }
-                    }
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = customHostDraft,
-                            onValueChange = { customHostDraft = it },
-                            label = { Text("Optional MagicDNS / Tailscale hostname") },
-                            placeholder = { Text("e.g., phone.tailnet.ts.net") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f)
-                        )
-                        TextButton(
-                            onClick = { onUpdateCustomPrivateHost(customHostDraft) },
-                            modifier = Modifier.testTag("save_custom_host_button")
-                        ) {
-                            Text("Save")
-                        }
-                    }
-                }
-            }
-        }
-
-        // Synced Peer Address Book (Mesh Directory)
+        // Synced Peer Address Book (Wi-Fi Mesh Directory)
         item(key = "peer_book_header") {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -362,14 +274,9 @@ fun HouseholdMeshScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        val addrSummary = listOfNotNull(
-                            peer.lanIp.takeIf { it.isNotBlank() }?.let { "Wi-Fi $it" },
-                            peer.tailscaleIp.takeIf { it.isNotBlank() }?.let { "Tailscale $it" },
-                            peer.customPrivateHost.takeIf { it.isNotBlank() }
-                        ).joinToString("  •  ")
-                        if (addrSummary.isNotBlank()) {
+                        if (peer.lanIp.isNotBlank()) {
                             Text(
-                                text = addrSummary,
+                                text = "Wi-Fi ${peer.lanIp}:${peer.port}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.secondary
                             )

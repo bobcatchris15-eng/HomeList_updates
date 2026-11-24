@@ -246,7 +246,7 @@ fun MeshStatusPill(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val isLive = status.serverRunning && (status.activeWifiPeers > 0 || status.tailscaleIp.isNotBlank())
+    val isLive = status.serverRunning && status.activeWifiPeers > 0
     val container = if (isLive) {
         MaterialTheme.colorScheme.secondaryContainer
     } else {
@@ -260,8 +260,7 @@ fun MeshStatusPill(
     val label = when {
         status.isSyncing -> "Syncing..."
         status.activeWifiPeers > 0 -> "Wi-Fi • ${status.activeWifiPeers} peer${if (status.activeWifiPeers == 1) "" else "s"}"
-        status.tailscaleIp.isNotBlank() -> "Mesh • Tailscale"
-        status.serverRunning -> "Mesh • ${peerCount} node${if (peerCount == 1) "" else "s"}"
+        status.serverRunning -> "Wi-Fi • ${peerCount} node${if (peerCount == 1) "" else "s"}"
         else -> "Local offline"
     }
 

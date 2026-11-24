@@ -826,38 +826,17 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
         calendarBridge.buildInsertCalendarIntent(event)
 
     // -------------------------------------------------------------------------
-    // Mesh Controls, Founder Check-In Timer & Household Preferences
+    // Mesh Controls & Household Preferences
     // -------------------------------------------------------------------------
 
     fun syncMeshNow() {
         viewModelScope.launch {
             val count = meshEngine.syncMeshNow(silent = false)
             if (count > 0) {
-                showMessage("Mesh synced with $count peer${if (count == 1) "" else "s"}")
+                showMessage("Wi-Fi mesh synced with $count peer${if (count == 1) "" else "s"}")
             } else {
-                showMessage("Saved locally — no other peers reachable right now")
+                showMessage("Saved locally — no other phones found on Wi-Fi right now")
             }
-        }
-    }
-
-    fun updatePrivateCheckInSettings(acceptPrivate: Boolean, intervalMinutes: Int) {
-        viewModelScope.launch {
-            repository.updateConfig {
-                it.copy(
-                    acceptPrivateCheckIns = acceptPrivate,
-                    checkInIntervalMinutes = intervalMinutes
-                )
-            }
-            meshEngine.restartCheckInTimer()
-            meshEngine.gossipAfterLocalChange()
-        }
-    }
-
-    fun updateCustomPrivateHost(host: String) {
-        viewModelScope.launch {
-            repository.updateConfig { it.copy(customPrivateHost = host.trim()) }
-            meshEngine.gossipAfterLocalChange()
-            showMessage("Updated private/Tailscale host")
         }
     }
 

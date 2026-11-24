@@ -93,10 +93,8 @@ data class MeshRuntimeStatus(
     val serverRunning: Boolean = false,
     val listenPort: Int = 8765,
     val lanIp: String = "",
-    val tailscaleIp: String = "",
     val activeWifiPeers: Int = 0,
     val isSyncing: Boolean = false,
     val lastSyncMessage: String = "Ready",
-    val lastSyncTimeMs: Long = 0L,
-    val nextCheckInLabel: String = ""
+    val lastSyncTimeMs: Long = 0L
 )

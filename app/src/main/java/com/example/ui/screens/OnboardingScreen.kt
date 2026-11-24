@@ -170,8 +170,8 @@ private fun WelcomeHeroSection(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             FeatureBullet(
-                title = "Pure phone-to-phone mesh",
-                body = "No cloud accounts or PC required. Phones auto-sync on home Wi-Fi and privately over Tailscale."
+                title = "Pure phone-to-phone Wi-Fi mesh",
+                body = "No cloud accounts or PC required. Phones automatically discover each other and sync over home Wi-Fi."
             )
             FeatureBullet(
                 title = "Parent & Child sides",
@@ -398,8 +398,8 @@ private fun JoinGroupingSection(
                 if (parsed.third.isNotBlank()) pairingCode = parsed.third
             }
         },
-        label = { Text("Peer Wi-Fi IP, Tailscale IP, or pairing link") },
-        placeholder = { Text("e.g., 192.168.1.42:8765 or 100.82.10.5:8765") },
+        label = { Text("Peer Wi-Fi IP or pairing link") },
+        placeholder = { Text("e.g., 192.168.1.42:8765") },
         singleLine = true,
         modifier = Modifier
             .fillMaxWidth()

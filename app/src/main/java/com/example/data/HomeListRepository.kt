@@ -57,8 +57,6 @@ class HomeListRepository(private val dao: HomeListDao) {
             selfRole = MemberRole.PARENT.name,
             deviceType = deviceType.name,
             isFounder = true,
-            acceptPrivateCheckIns = true,
-            checkInIntervalMinutes = 15,
             listenPort = 8765,
             lastSyncedAt = now
         )
@@ -81,7 +79,6 @@ class HomeListRepository(private val dao: HomeListDao) {
             deviceType = deviceType.name,
             isFounder = true,
             lanIp = addresses.lanIp,
-            tailscaleIp = addresses.tailscaleIp,
             port = config.listenPort,
             appVersionCode = BuildConfig.VERSION_CODE,
             appVersionName = BuildConfig.VERSION_NAME,
@@ -130,8 +127,6 @@ class HomeListRepository(private val dao: HomeListDao) {
             selfRole = role.name,
             deviceType = deviceType.name,
             isFounder = false,
-            acceptPrivateCheckIns = true,
-            checkInIntervalMinutes = 15,
             listenPort = 8765,
             lastSyncedAt = now
         )
@@ -154,7 +149,6 @@ class HomeListRepository(private val dao: HomeListDao) {
             deviceType = deviceType.name,
             isFounder = false,
             lanIp = addresses.lanIp,
-            tailscaleIp = addresses.tailscaleIp,
             port = config.listenPort,
             appVersionCode = BuildConfig.VERSION_CODE,
             appVersionName = BuildConfig.VERSION_NAME,
@@ -182,8 +176,6 @@ class HomeListRepository(private val dao: HomeListDao) {
             deviceType = config.deviceType,
             isFounder = config.isFounder,
             lanIp = addresses.lanIp,
-            tailscaleIp = addresses.tailscaleIp,
-            customPrivateHost = config.customPrivateHost,
             port = config.listenPort,
             appVersionCode = BuildConfig.VERSION_CODE,
             appVersionName = BuildConfig.VERSION_NAME,

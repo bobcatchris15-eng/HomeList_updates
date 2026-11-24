@@ -60,11 +60,7 @@ class MeshSyncEngine(
             _status.update {
                 it.copy(
                     lastSyncTimeMs = System.currentTimeMillis(),
-                    lastSyncMessage = if (NetworkAddressDetector.isTailscaleAddress(remoteIp)) {
-                        "Private check-in synced"
-                    } else {
-                        "Wi-Fi peer synced"
-                    }
+                    lastSyncMessage = "Wi-Fi peer synced"
                 )
             }
             if (NetworkAddressDetector.isLanAddress(remoteIp)) {
@@ -78,7 +74,7 @@ class MeshSyncEngine(
     private var multicastLock: WifiManager.MulticastLock? = null
     private var registrationListener: NsdManager.RegistrationListener? = null
     private var discoveryListener: NsdManager.DiscoveryListener? = null
-    private var checkInTimerJob: Job? = null
+    private var periodicSyncJob: Job? = null
     private var registeredServiceName: String? = null
 
     private val _status = MutableStateFlow(MeshRuntimeStatus())
@@ -107,8 +103,7 @@ class MeshSyncEngine(
                     serverRunning = boundPort > 0,
                     listenPort = if (boundPort > 0) boundPort else config.listenPort,
                     lanIp = addresses.lanIp,
-                    tailscaleIp = addresses.tailscaleIp,
-                    lastSyncMessage = if (boundPort > 0) "Mesh node active" else "Offline (local)"
+                    lastSyncMessage = if (boundPort > 0) "Wi-Fi mesh active" else "Offline (local)"
                 )
             }
 
@@ -116,14 +111,14 @@ class MeshSyncEngine(
                 registerMdnsService(config.nodeId, boundPort)
             }
             startMdnsDiscovery()
-            startFounderCheckInLoop()
+            startPeriodicWifiSyncLoop()
             syncMeshNow(silent = true)
         }
     }
 
     fun stopMeshNode() {
-        checkInTimerJob?.cancel()
-        checkInTimerJob = null
+        periodicSyncJob?.cancel()
+        periodicSyncJob = null
         stopMdnsDiscovery()
         unregisterMdnsService()
         server.stop()
@@ -135,9 +130,7 @@ class MeshSyncEngine(
         scope.launch {
             val addresses = NetworkAddressDetector.detect()
             repository.refreshSelfPeerAddresses()
-            _status.update {
-                it.copy(lanIp = addresses.lanIp, tailscaleIp = addresses.tailscaleIp)
-            }
+            _status.update { it.copy(lanIp = addresses.lanIp) }
         }
     }
 
@@ -147,32 +140,14 @@ class MeshSyncEngine(
         }
     }
 
-    fun restartCheckInTimer() {
-        startFounderCheckInLoop()
-    }
-
-    private fun startFounderCheckInLoop() {
-        checkInTimerJob?.cancel()
-        checkInTimerJob = scope.launch {
+    private fun startPeriodicWifiSyncLoop() {
+        periodicSyncJob?.cancel()
+        periodicSyncJob = scope.launch {
             while (isActive) {
-                val config = repository.getConfig()
-                val intervalMin = config?.checkInIntervalMinutes ?: 0
-                if (config == null || intervalMin <= 0) {
-                    _status.update { it.copy(nextCheckInLabel = "Manual sync") }
-                    delay(60_000L)
-                    continue
+                delay(WIFI_GOSSIP_INTERVAL_MS)
+                if (repository.getConfig() != null) {
+                    syncMeshNow(silent = true)
                 }
-                _status.update {
-                    it.copy(
-                        nextCheckInLabel = if (config.isFounder) {
-                            if (config.acceptPrivateCheckIns) "Accepting check-ins" else "Private window paused"
-                        } else {
-                            "Check-in every ${intervalMin}m"
-                        }
-                    )
-                }
-                delay(intervalMin * 60_000L)
-                syncMeshNow(silent = true)
             }
         }
     }
@@ -217,9 +192,6 @@ class MeshSyncEngine(
                 if (res.code == 401) {
                     return@withContext Result.failure(IllegalArgumentException("Incorrect 6-character pairing code"))
                 }
-                if (res.code == 403) {
-                    return@withContext Result.failure(IllegalStateException("Founder private check-in window is currently paused"))
-                }
                 if (!res.isSuccessful) {
                     return@withContext Result.failure(IllegalStateException("Peer returned HTTP ${res.code}"))
                 }
@@ -239,8 +211,7 @@ class MeshSyncEngine(
         _status.update {
             it.copy(
                 isSyncing = true,
-                lanIp = addresses.lanIp,
-                tailscaleIp = addresses.tailscaleIp
+                lanIp = addresses.lanIp
             )
         }
 
@@ -250,7 +221,7 @@ class MeshSyncEngine(
             return@withContext 0
         }
 
-        // Gather all candidate endpoints: mDNS Wi-Fi peers + saved Peer Address Book (LAN, Tailscale, custom host)
+        // Gather all candidate home Wi-Fi endpoints: mDNS peers + saved Peer Address Book LAN IPs
         val targets = linkedSetOf<Pair<String, Int>>()
         _discoveredNodes.value
             .filter { it.householdId.isBlank() || it.householdId == config.householdId }
@@ -261,16 +232,9 @@ class MeshSyncEngine(
             }
 
         val savedPeers = repository.getAllPeers().filter { it.nodeId != config.nodeId }
-        // Prioritize Founder endpoints first for timed private check-ins
         savedPeers.sortedByDescending { it.isFounder }.forEach { peer ->
             if (peer.lanIp.isNotBlank() && peer.lanIp != addresses.lanIp) {
                 targets.add(peer.lanIp to peer.port)
-            }
-            if (peer.tailscaleIp.isNotBlank() && peer.tailscaleIp != addresses.tailscaleIp) {
-                targets.add(peer.tailscaleIp to peer.port)
-            }
-            if (peer.customPrivateHost.isNotBlank()) {
-                targets.add(normalizeHost(peer.customPrivateHost) to peer.port)
             }
         }
 
@@ -521,6 +485,7 @@ class MeshSyncEngine(
 
     companion object {
         private const val TAG = "MeshSyncEngine"
+        private const val WIFI_GOSSIP_INTERVAL_MS = 2 * 60_000L
         const val SERVICE_TYPE = "_homelist._tcp."
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
