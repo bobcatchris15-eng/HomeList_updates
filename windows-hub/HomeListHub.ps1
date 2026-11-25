@@ -1,4 +1,4 @@
-# HomeList Windows Home Hub
+﻿# HomeList Windows Home Hub
 # Zero-dependency local-first family sync relay & Wall Board for Windows 10/11.
 # Double-click Start-HomeListHub.bat to launch (no Python, Node, Docker, or Admin needed).
 
@@ -187,7 +187,7 @@ function Load-OrCreateConfig {
 
     Write-Host ""
     Write-Host "============================================================" -ForegroundColor Cyan
-    Write-Host "     HomeList Windows Founding Hub — First-Time Setup" -ForegroundColor Cyan
+    Write-Host "     HomeList Windows Founding Hub - First-Time Setup" -ForegroundColor Cyan
     Write-Host "============================================================" -ForegroundColor Cyan
     Write-Host "This PC will act as your household's Founding Hub by default." -ForegroundColor Gray
     Write-Host "Family phones simply join using the IP and pairing code below." -ForegroundColor Gray
@@ -536,7 +536,7 @@ async function load(){
     const d = await r.json();
     document.getElementById('title').textContent = d.householdName || 'HomeList Home Hub';
     document.getElementById('dateLabel').textContent = d.todayDateLabel || '';
-    document.getElementById('summaryPill').textContent = d.overallCompleted + ' of ' + d.overallTotal + ' done • ' + d.peerCount + ' nodes';
+    document.getElementById('summaryPill').textContent = d.overallCompleted + ' of ' + d.overallTotal + ' done \u2022 ' + d.peerCount + ' nodes';
     document.getElementById('dinner').textContent = d.tonightDinner || 'Vote open on HomeList';
     const mEl = document.getElementById('members'); mEl.textContent = '';
     (d.members || []).forEach(m => {
