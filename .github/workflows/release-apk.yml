@@ -123,6 +123,12 @@ jobs:
           cp "$APK_SRC" "$OUT_APK"
           echo "apk_path=${OUT_APK}" >> "$GITHUB_OUTPUT"
 
+          # Package Windows Home Hub with matching release version
+          printf '%s\n' "${{ steps.version.outputs.name }}" > windows-hub/VERSION.txt
+          OUT_HUB_ZIP="HomeList-Windows-Hub-${{ steps.version.outputs.tag }}.zip"
+          zip -r "$OUT_HUB_ZIP" windows-hub -x "windows-hub/homelist-hub-config.json" "windows-hub/homelist-hub-data.json"
+          echo "hub_zip_path=${OUT_HUB_ZIP}" >> "$GITHUB_OUTPUT"
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
         with:
@@ -130,8 +136,11 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: HomeList ${{ steps.version.outputs.tag }}
           generate_release_notes: true
-          files: ${{ steps.build.outputs.apk_path }}
+          files: |
+            ${{ steps.build.outputs.apk_path }}
+            ${{ steps.build.outputs.hub_zip_path }}
           body: |
-            HomeList Android update (`${{ steps.build.outputs.signed_mode }}` signed).
+            HomeList release (`${{ steps.build.outputs.signed_mode }}` signed Android APK + optional Windows Home Hub).
 
-            Install on family phones by tapping the `.apk` asset below or automatically via Obtainium pointed at `https://github.com/bobcatchris15-eng/HomeList_updates`.
+            - **Android phones**: Tap the `.apk` asset below to install. Phones auto-check this repository nightly.
+            - **Windows Home Hub (optional)**: Download the `.zip` asset below (or run `Update-HomeListHub.bat`). The Windows Hub also checks this same release URL nightly.

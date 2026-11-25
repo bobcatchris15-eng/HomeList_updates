@@ -91,15 +91,24 @@ fun CalendarScreen(
     var showCalendarPickerDialog by remember { mutableStateOf(false) }
     var showIcsDialog by remember { mutableStateOf(false) }
 
+    val todayKey = remember { DateStreakUtils.todayKey() }
     val completedLookup = remember(state.completions) {
         state.completions.filter { it.isCompleted }.map { it.id }.toSet()
+    }
+    val completedDatesByChore = remember(state.completions) {
+        state.completions
+            .filter { it.isCompleted }
+            .groupBy({ it.choreId }, { it.dateKey })
+            .mapValues { it.value.toSet() }
     }
     val selectedSlot = weekSlots.firstOrNull { it.dateKey == selectedDateKey } ?: weekSlots.first()
     val dayEvents = remember(state.events, selectedDateKey) {
         state.events.filter { it.dateKey == selectedDateKey }
     }
-    val dayChores = remember(state.chores, selectedSlot) {
-        state.chores.filter { it.isScheduledForDayOfWeek(selectedSlot.isoDayOfWeek) }
+    val dayChores = remember(state.chores, selectedSlot, completedDatesByChore, todayKey) {
+        state.chores.filter {
+            it.isScheduledForDate(selectedSlot.dateKey, completedDatesByChore[it.id].orEmpty(), todayKey)
+        }
     }
     val membersById = remember(state.members) { state.members.associateBy { it.id } }
 
@@ -157,9 +166,11 @@ fun CalendarScreen(
                     ) {
                         weekSlots.forEach { slot ->
                             val isSelected = slot.dateKey == selectedDateKey
-                            val scheduledCount = state.chores.count { it.isScheduledForDayOfWeek(slot.isoDayOfWeek) }
+                            val scheduledCount = state.chores.count {
+                                it.isScheduledForDate(slot.dateKey, completedDatesByChore[it.id].orEmpty(), todayKey)
+                            }
                             val doneCount = state.chores.count {
-                                it.isScheduledForDayOfWeek(slot.isoDayOfWeek) &&
+                                it.isScheduledForDate(slot.dateKey, completedDatesByChore[it.id].orEmpty(), todayKey) &&
                                     "${it.id}_${slot.dateKey}" in completedLookup
                             }
                             val hasEvents = state.events.any { it.dateKey == slot.dateKey }
@@ -476,7 +487,11 @@ fun CalendarScreen(
                             val isDone = "${chore.id}_${selectedDateKey}" in completedLookup
                             val assignee = chore.effectiveAssigneeForDate(selectedDateKey)
                                 ?.let { membersById[it]?.displayName } ?: "Anyone"
-                            val suffix = if (chore.isRotating()) " ↻" else ""
+                            val suffix = when {
+                                !chore.isRecurring -> " • One-off"
+                                chore.isRotating() -> " ↻"
+                                else -> ""
+                            }
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,

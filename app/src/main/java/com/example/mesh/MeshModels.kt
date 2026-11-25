@@ -27,7 +27,8 @@ data class MeshGossipPayload(
     val events: List<CalendarEventEntity> = emptyList(),
     val dinnerOptions: List<DinnerOptionEntity> = emptyList(),
     val groceryItems: List<GroceryItemEntity> = emptyList(),
-    val updateReleaseUrl: String = ""
+    val updateReleaseUrl: String = "",
+    val hubUrl: String = ""
 )
 
 @JsonClass(generateAdapter = true)
@@ -94,6 +95,7 @@ data class MeshRuntimeStatus(
     val listenPort: Int = 8765,
     val lanIp: String = "",
     val activeWifiPeers: Int = 0,
+    val hubConnected: Boolean = false,
     val isSyncing: Boolean = false,
     val lastSyncMessage: String = "Ready",
     val lastSyncTimeMs: Long = 0L

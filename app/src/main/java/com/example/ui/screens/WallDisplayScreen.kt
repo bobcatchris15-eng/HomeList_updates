@@ -91,13 +91,20 @@ fun WallDisplayScreen(
 
     val (clockDigits, amPm) = remember(nowMs) { DateStreakUtils.formatClockTime(nowMs) }
     val todayKey = remember(nowMs) { DateStreakUtils.todayKey() }
-    val todayIso = remember(todayKey) { DateStreakUtils.isoDayOfWeek(todayKey) }
     val weekSlots = remember(todayKey) { DateStreakUtils.weekSlots(0) }
     val completedIds = remember(state.completions) {
         state.completions.filter { it.isCompleted }.map { it.id }.toSet()
     }
-    val todayChores = remember(state.chores, todayIso) {
-        state.chores.filter { it.isScheduledForDayOfWeek(todayIso) }
+    val completedDatesByChore = remember(state.completions) {
+        state.completions
+            .filter { it.isCompleted }
+            .groupBy({ it.choreId }, { it.dateKey })
+            .mapValues { it.value.toSet() }
+    }
+    val todayChores = remember(state.chores, completedDatesByChore, todayKey) {
+        state.chores.filter {
+            it.isScheduledForDate(todayKey, completedDatesByChore[it.id].orEmpty(), todayKey)
+        }
     }
     val overallDone = todayChores.count { "${it.id}_${todayKey}" in completedIds }
     val overallProgress = if (todayChores.isEmpty()) 0f else overallDone.toFloat() / todayChores.size.toFloat()
@@ -329,7 +336,7 @@ fun WallDisplayScreen(
                                 }
                                 weekSlots.forEach { slot ->
                                     val sched = state.chores.filter {
-                                        it.isScheduledForDayOfWeek(slot.isoDayOfWeek) &&
+                                        it.isScheduledForDate(slot.dateKey, completedDatesByChore[it.id].orEmpty(), todayKey) &&
                                             it.effectiveAssigneeForDate(slot.dateKey) == member.id
                                     }
                                     val doneCount = sched.count { "${it.id}_${slot.dateKey}" in completedIds }

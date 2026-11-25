@@ -142,6 +142,7 @@ data class NodeConfigEntity(
     val googleCalendarName: String = "",
     val icsFeedUrl: String = "",
     val updateReleaseUrl: String = "https://github.com/bobcatchris15-eng/HomeList_updates/releases/latest",
+    val hubUrl: String = "",
     val darkTheme: Boolean = false,
     val lastSyncedAt: Long = 0L
 )
@@ -186,6 +187,8 @@ data class ChoreEntity(
     val rotationMemberIdsCsv: String = "",
     val rotationCadence: String = RotationCadence.NONE.name,
     val rotationAnchorDateKey: String = "",
+    val isRecurring: Boolean = true,
+    val dueDateKey: String = "",
     val daysOfWeekCsv: String = "1,2,3,4,5,6,7",
     val timeOfDay: String = TimeOfDay.ANYTIME.name,
     val reminderHour: Int = -1,
@@ -205,6 +208,34 @@ data class ChoreEntity(
         return days.isEmpty() || isoDay in days
     }
 
+    /**
+     * Resolves whether a recurring or one-off chore belongs on [dateKey].
+     * - Recurring chores repeat on their configured days of week.
+     * - One-off chores appear on their due date (or today if flexible/overdue) until completed,
+     *   and stay visible on the day they were checked off so the user can see or undo completion.
+     */
+    fun isScheduledForDate(
+        dateKey: String,
+        completedDateKeysForChore: Set<String> = emptySet(),
+        todayKey: String = DateStreakUtils.todayKey()
+    ): Boolean {
+        if (isRecurring) {
+            return isScheduledForDayOfWeek(DateStreakUtils.isoDayOfWeek(dateKey))
+        }
+        if (dateKey in completedDateKeysForChore) return true
+        val earliestCompleted = completedDateKeysForChore.minOrNull()
+        if (earliestCompleted != null && dateKey > earliestCompleted) return false
+        if (dueDateKey.isNotBlank()) {
+            if (dateKey == dueDateKey) return true
+            // Overdue unfinished one-off carries over onto today until done
+            if (dateKey == todayKey && dueDateKey < todayKey && completedDateKeysForChore.isEmpty()) {
+                return true
+            }
+            return false
+        }
+        return dateKey == todayKey
+    }
+
     fun rotationMemberIds(): List<String> =
         rotationMemberIdsCsv.split(",")
             .map { it.trim() }
@@ -214,7 +245,7 @@ data class ChoreEntity(
     fun cadence(): RotationCadence = RotationCadence.fromString(rotationCadence)
 
     fun isRotating(): Boolean =
-        cadence() != RotationCadence.NONE && rotationMemberIds().size >= 2
+        isRecurring && cadence() != RotationCadence.NONE && rotationMemberIds().size >= 2
 
     fun effectiveAssigneeForDate(dateKey: String): String? =
         DateStreakUtils.resolveChoreAssignee(this, dateKey)

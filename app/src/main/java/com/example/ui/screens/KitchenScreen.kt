@@ -1,9 +1,7 @@
 package com.example.ui.screens
 
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -23,15 +21,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.DeleteSweep
-import androidx.compose.material.icons.filled.NotificationsNone
 import androidx.compose.material.icons.filled.Restaurant
-import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material.icons.outlined.DeleteOutline
@@ -46,13 +38,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -64,97 +52,22 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.DateStreakUtils
 import com.example.data.DinnerOptionEntity
-import com.example.data.GroceryItemEntity
 import com.example.data.MealSlot
 import com.example.ui.HomeListUiState
 
-enum class KitchenSubTab(val label: String) {
-    MEALS("Meals"),
-    SHOPPING("Shopping")
-}
-
 @Composable
-fun KitchenScreen(
+fun MealsScreen(
     state: HomeListUiState,
     onProposeMeal: (dateKey: String, mealName: String, mealSlot: MealSlot, notes: String) -> Unit,
     onUpdateMeal: (DinnerOptionEntity) -> Unit,
     onToggleMealVote: (DinnerOptionEntity) -> Unit,
     onSetMealWinner: (DinnerOptionEntity) -> Unit,
     onDeleteMealOption: (DinnerOptionEntity) -> Unit,
-    onAddShoppingItem: (name: String) -> Unit,
-    onToggleShoppingItem: (GroceryItemEntity) -> Unit,
-    onDeleteShoppingItem: (GroceryItemEntity) -> Unit,
-    onClearCheckedShopping: () -> Unit,
     modifier: Modifier = Modifier
-) {
-    var activeSubTab by remember { mutableStateOf(KitchenSubTab.MEALS) }
-
-    Column(modifier = modifier.fillMaxSize()) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-        ) {
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                KitchenSubTab.entries.forEachIndexed { idx, tab ->
-                    val badge = if (tab == KitchenSubTab.SHOPPING) {
-                        val openCount = state.groceryItems.count { !it.isChecked }
-                        if (openCount > 0) " ($openCount)" else ""
-                    } else ""
-                    SegmentedButton(
-                        selected = activeSubTab == tab,
-                        onClick = { activeSubTab = tab },
-                        shape = SegmentedButtonDefaults.itemShape(idx, KitchenSubTab.entries.size),
-                        icon = {
-                            Icon(
-                                imageVector = if (tab == KitchenSubTab.MEALS) Icons.Filled.Restaurant else Icons.Filled.ShoppingCart,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        },
-                        modifier = Modifier.testTag("kitchen_subtab_${tab.name.lowercase()}")
-                    ) {
-                        Text(tab.label + badge)
-                    }
-                }
-            }
-        }
-
-        when (activeSubTab) {
-            KitchenSubTab.MEALS -> FlexibleMealsSection(
-                state = state,
-                onProposeMeal = onProposeMeal,
-                onUpdateMeal = onUpdateMeal,
-                onToggleVote = onToggleMealVote,
-                onSetWinner = onSetMealWinner,
-                onDeleteOption = onDeleteMealOption
-            )
-
-            KitchenSubTab.SHOPPING -> PlainShoppingListSection(
-                state = state,
-                onAddItem = onAddShoppingItem,
-                onToggleItem = onToggleShoppingItem,
-                onDeleteItem = onDeleteShoppingItem,
-                onClearChecked = onClearCheckedShopping
-            )
-        }
-    }
-}
-
-@Composable
-private fun FlexibleMealsSection(
-    state: HomeListUiState,
-    onProposeMeal: (String, String, MealSlot, String) -> Unit,
-    onUpdateMeal: (DinnerOptionEntity) -> Unit,
-    onToggleVote: (DinnerOptionEntity) -> Unit,
-    onSetWinner: (DinnerOptionEntity) -> Unit,
-    onDeleteOption: (DinnerOptionEntity) -> Unit
 ) {
     val weekSlots = remember { DateStreakUtils.weekSlots(0) }
     var selectedDateKey by remember { mutableStateOf(DateStreakUtils.todayKey()) }
@@ -179,8 +92,8 @@ private fun FlexibleMealsSection(
     val winners = remember(dayOptions) { dayOptions.filter { it.isWinner } }
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 96.dp),
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         // 7-Day Selector Strip
@@ -408,11 +321,10 @@ private fun FlexibleMealsSection(
                             .padding(14.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Vote Counter Pill
                         Surface(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(14.dp))
-                                .clickable { onToggleVote(option) }
+                                .clickable { onToggleMealVote(option) }
                                 .testTag("vote_dinner_${option.id}"),
                             shape = RoundedCornerShape(14.dp),
                             color = if (hasVoted) MaterialTheme.colorScheme.primary
@@ -503,7 +415,7 @@ private fun FlexibleMealsSection(
 
                         if (state.isParent) {
                             IconButton(
-                                onClick = { onSetWinner(option) },
+                                onClick = { onSetMealWinner(option) },
                                 modifier = Modifier.testTag("pick_dinner_winner_${option.id}")
                             ) {
                                 Icon(
@@ -516,7 +428,7 @@ private fun FlexibleMealsSection(
                         }
 
                         if (canEdit) {
-                            IconButton(onClick = { onDeleteOption(option) }) {
+                            IconButton(onClick = { onDeleteMealOption(option) }) {
                                 Icon(
                                     imageVector = Icons.Outlined.DeleteOutline,
                                     contentDescription = "Remove meal",
@@ -640,269 +552,5 @@ private fun FlexibleMealsSection(
                 TextButton(onClick = { showMealDialog = false }) { Text("Cancel") }
             }
         )
-    }
-}
-
-@Composable
-private fun PlainShoppingListSection(
-    state: HomeListUiState,
-    onAddItem: (String) -> Unit,
-    onToggleItem: (GroceryItemEntity) -> Unit,
-    onDeleteItem: (GroceryItemEntity) -> Unit,
-    onClearChecked: () -> Unit
-) {
-    var itemInput by remember { mutableStateOf("") }
-
-    val toBuy = remember(state.groceryItems) { state.groceryItems.filter { !it.isChecked } }
-    val checked = remember(state.groceryItems) { state.groceryItems.filter { it.isChecked } }
-
-    fun submitItem() {
-        val trimmed = itemInput.trim()
-        if (trimmed.isNotBlank()) {
-            onAddItem(trimmed)
-            itemInput = ""
-        }
-    }
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 96.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        // Simple single-bar shopping request input
-        item(key = "shopping_quick_add") {
-            Surface(
-                shape = RoundedCornerShape(22.dp),
-                color = MaterialTheme.colorScheme.surface,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        OutlinedTextField(
-                            value = itemInput,
-                            onValueChange = { itemInput = it },
-                            label = { Text("Add to shopping list") },
-                            placeholder = { Text("Milk, apples, paper towels...") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                            keyboardActions = KeyboardActions(onDone = { submitItem() }),
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("grocery_item_input")
-                        )
-                        Button(
-                            onClick = { submitItem() },
-                            enabled = itemInput.isNotBlank(),
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier
-                                .height(54.dp)
-                                .testTag("add_grocery_button")
-                        ) {
-                            Icon(Icons.Filled.Add, contentDescription = "Add shopping item")
-                        }
-                    }
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.NotificationsNone,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.secondary,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Text(
-                            text = "Checking off an item notifies who requested it when phones sync",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        }
-
-        if (toBuy.isEmpty() && checked.isEmpty()) {
-            item(key = "shopping_empty") {
-                Surface(
-                    shape = RoundedCornerShape(22.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.ShoppingCart,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.secondary,
-                            modifier = Modifier.size(34.dp)
-                        )
-                        Text("Shopping list is clear", style = MaterialTheme.typography.headlineSmall)
-                        Text(
-                            text = "Anyone can jot down what we're out of. Check items off as you grab them and the requestor gets notified on sync.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        } else {
-            if (toBuy.isNotEmpty()) {
-                item(key = "shopping_open_header") {
-                    Text(
-                        text = "Needed (${toBuy.size})",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(start = 4.dp, top = 2.dp)
-                    )
-                }
-                items(toBuy, key = { it.id }) { item ->
-                    ShoppingListRow(
-                        item = item,
-                        onToggle = { onToggleItem(item) },
-                        onDelete = { onDeleteItem(item) }
-                    )
-                }
-            }
-
-            if (checked.isNotEmpty()) {
-                item(key = "shopping_checked_header") {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 6.dp, start = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Checked (${checked.size})",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        TextButton(
-                            onClick = onClearChecked,
-                            modifier = Modifier.testTag("clear_checked_groceries_button")
-                        ) {
-                            Icon(Icons.Filled.DeleteSweep, null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Clear Checked")
-                        }
-                    }
-                }
-                items(checked, key = { it.id }) { item ->
-                    ShoppingListRow(
-                        item = item,
-                        onToggle = { onToggleItem(item) },
-                        onDelete = { onDeleteItem(item) }
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ShoppingListRow(
-    item: GroceryItemEntity,
-    onToggle: () -> Unit,
-    onDelete: () -> Unit
-) {
-    val bg by animateColorAsState(
-        targetValue = if (item.isChecked) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f)
-        else MaterialTheme.colorScheme.surface,
-        label = "shopping_bg"
-    )
-    Surface(
-        shape = RoundedCornerShape(18.dp),
-        color = bg,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("grocery_row_${item.id}")
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onToggle)
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier.minimumInteractiveComponentSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(24.dp)
-                        .clip(RoundedCornerShape(7.dp))
-                        .background(if (item.isChecked) MaterialTheme.colorScheme.secondary else Color.Transparent)
-                        .border(
-                            2.dp,
-                            if (item.isChecked) MaterialTheme.colorScheme.secondary
-                            else MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
-                            RoundedCornerShape(7.dp)
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (item.isChecked) {
-                        Icon(
-                            Icons.Filled.Check,
-                            contentDescription = "Checked off",
-                            tint = MaterialTheme.colorScheme.onSecondary,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                }
-            }
-
-            Spacer(Modifier.width(6.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = if (item.quantity.isNotBlank()) "${item.name} (${item.quantity})" else item.name,
-                    style = MaterialTheme.typography.titleSmall,
-                    textDecoration = if (item.isChecked) TextDecoration.LineThrough else TextDecoration.None,
-                    color = if (item.isChecked) MaterialTheme.colorScheme.onSurfaceVariant
-                    else MaterialTheme.colorScheme.onSurface
-                )
-                val subtitle = buildString {
-                    if (item.addedByName.isNotBlank()) {
-                        append("Requested by ${item.addedByName}")
-                    }
-                    if (item.isChecked && item.checkedByName.isNotBlank()) {
-                        if (isNotEmpty()) append(" • ")
-                        append("Got by ${item.checkedByName}")
-                    }
-                }
-                if (subtitle.isNotBlank()) {
-                    Text(
-                        text = subtitle,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            IconButton(onClick = onDelete) {
-                Icon(
-                    Icons.Outlined.DeleteOutline,
-                    contentDescription = "Remove item",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
     }
 }

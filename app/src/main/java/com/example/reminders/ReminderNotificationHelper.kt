@@ -8,6 +8,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -16,6 +17,7 @@ import com.example.MainActivity
 import com.example.R
 import com.example.data.ChoreEntity
 import com.example.data.DateStreakUtils
+import com.example.data.GroceryItemEntity
 import com.example.data.ReminderEntity
 import com.example.data.ReminderTriggerType
 import java.util.Calendar
@@ -23,6 +25,7 @@ import java.util.Calendar
 object ReminderNotificationHelper {
     const val CHANNEL_REMINDERS = "homelist_reminders"
     const val CHANNEL_NUDGES = "homelist_nudges"
+    const val CHANNEL_UPDATES = "homelist_updates"
 
     const val EXTRA_TITLE = "extra_title"
     const val EXTRA_BODY = "extra_body"
@@ -49,8 +52,17 @@ object ReminderNotificationHelper {
             description = context.getString(R.string.notification_channel_nudges_desc)
         }
 
+        val updatesChannel = NotificationChannel(
+            CHANNEL_UPDATES,
+            context.getString(R.string.notification_channel_updates_name),
+            NotificationManager.IMPORTANCE_DEFAULT
+        ).apply {
+            description = context.getString(R.string.notification_channel_updates_desc)
+        }
+
         manager.createNotificationChannel(remindersChannel)
         manager.createNotificationChannel(nudgesChannel)
+        manager.createNotificationChannel(updatesChannel)
     }
 
     fun hasNotificationPermission(context: Context): Boolean {
@@ -101,6 +113,98 @@ object ReminderNotificationHelper {
         }
     }
 
+    fun postUpdateNotification(
+        context: Context,
+        versionName: String,
+        downloadUrl: String,
+        releaseNotes: String
+    ) {
+        ensureChannels(context)
+        if (!hasNotificationPermission(context)) return
+
+        val targetIntent = if (
+            downloadUrl.startsWith("https://", ignoreCase = true) ||
+            downloadUrl.startsWith("http://", ignoreCase = true)
+        ) {
+            Intent(Intent.ACTION_VIEW, Uri.parse(downloadUrl)).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+        } else {
+            Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+        }
+
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            9042,
+            targetIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val body = releaseNotes.ifBlank { "Tap to download and install the latest HomeList update." }
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_UPDATES)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("HomeList v$versionName is ready")
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .build()
+
+        try {
+            NotificationManagerCompat.from(context).notify(9042, notification)
+        } catch (_: SecurityException) {
+        }
+    }
+
+    fun notifyIncomingMeshItems(
+        context: Context,
+        newReminders: List<ReminderEntity>,
+        fulfilledShoppingItems: List<GroceryItemEntity>,
+        onShoppingSummary: (String) -> Unit = {}
+    ) {
+        newReminders.forEach { rem ->
+            val isNudge = ReminderTriggerType.fromString(rem.triggerType) == ReminderTriggerType.NUDGE
+            val title = when {
+                isNudge && rem.isUrgent -> "URGENT • From ${rem.createdByName.ifBlank { "Parent" }}"
+                isNudge -> "Live reminder from ${rem.createdByName.ifBlank { "Parent" }}"
+                else -> rem.title
+            }
+            val body = if (isNudge) rem.title else rem.notes.ifBlank { "Synced from family mesh" }
+            postNotification(
+                context = context,
+                notificationId = rem.id.hashCode(),
+                title = title,
+                body = body,
+                channelId = if (isNudge) CHANNEL_NUDGES else CHANNEL_REMINDERS
+            )
+            scheduleTimeReminder(context, rem)
+        }
+
+        if (fulfilledShoppingItems.isNotEmpty()) {
+            val byChecker = fulfilledShoppingItems.groupBy { it.checkedByName.ifBlank { "Family" } }
+            byChecker.forEach { (checkerName, checkedItems) ->
+                val names = checkedItems.joinToString(", ") { it.name }
+                val notifTitle = if (checkedItems.size == 1) {
+                    "Shopping item picked up"
+                } else {
+                    "${checkedItems.size} shopping items picked up"
+                }
+                val notifBody = "$checkerName checked off $names"
+                postNotification(
+                    context = context,
+                    notificationId = ("shopping_got_${checkedItems.first().id}").hashCode(),
+                    title = notifTitle,
+                    body = notifBody,
+                    channelId = CHANNEL_REMINDERS
+                )
+                onShoppingSummary(notifBody)
+            }
+        }
+    }
+
     fun scheduleTimeReminder(context: Context, reminder: ReminderEntity) {
         if (reminder.isDeleted || reminder.isCompleted) {
             cancelScheduled(context, reminder.id.hashCode())
@@ -143,8 +247,8 @@ object ReminderNotificationHelper {
             return
         }
         val nextMillis = computeNextTriggerMillis(
-            dateKey = "",
-            repeatDaysCsv = chore.daysOfWeekCsv,
+            dateKey = if (chore.isRecurring) "" else chore.dueDateKey,
+            repeatDaysCsv = if (chore.isRecurring) chore.daysOfWeekCsv else "",
             hour = chore.reminderHour,
             minute = chore.reminderMinute
         ) ?: return

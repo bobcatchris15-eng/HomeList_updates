@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -18,6 +19,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddLocationAlt
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.outlined.Home
@@ -38,6 +40,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.example.data.ReminderEntity
@@ -49,7 +52,7 @@ import kotlin.math.roundToInt
 
 private enum class ReminderFilter(val label: String) {
     ACTIVE("Active"),
-    LOCATION("Location"),
+    LOCATION("At a Place"),
     COMPLETED("Done")
 }
 
@@ -61,7 +64,7 @@ fun RemindersScreen(
     onRequestNotificationPermission: () -> Unit,
     onRequestLocationPermission: () -> Unit,
     onRefreshLocation: () -> Unit,
-    onOpenAddReminder: () -> Unit,
+    onOpenAddReminder: (triggerType: ReminderTriggerType, placeId: String?) -> Unit,
     onOpenAddPlace: () -> Unit,
     onToggleReminder: (ReminderEntity) -> Unit,
     onDeleteReminder: (ReminderEntity) -> Unit,
@@ -113,12 +116,12 @@ fun RemindersScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            text = "Enable Smart Reminder Triggers",
+                            text = "Enable Reminder Alerts",
                             style = MaterialTheme.typography.titleSmall,
                             color = MaterialTheme.colorScheme.onTertiaryContainer
                         )
                         Text(
-                            text = "Grant notifications for timed alerts and foreground location to trigger reminders when arriving at or leaving saved places.",
+                            text = "Allow notifications for alerts and location for reminders when arriving at or leaving places like School or Grocery Store.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onTertiaryContainer
                         )
@@ -151,7 +154,7 @@ fun RemindersScreen(
             }
         }
 
-        // Saved Family Places Strip
+        // Saved Family Places Strip — tap any place to create a place reminder immediately
         item(key = "saved_places_section") {
             Surface(
                 shape = RoundedCornerShape(22.dp),
@@ -169,10 +172,10 @@ fun RemindersScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
-                            Text("Saved Family Places", style = MaterialTheme.typography.titleMedium)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Family Places", style = MaterialTheme.typography.titleMedium)
                             Text(
-                                text = "Synced across the mesh for Arrive / Leave triggers",
+                                text = "Tap a place to set an Arrive / Leave reminder",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -190,7 +193,7 @@ fun RemindersScreen(
                             ) {
                                 Icon(Icons.Filled.AddLocationAlt, null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(4.dp))
-                                Text("Pin Place")
+                                Text("Add Place")
                             }
                         }
                     }
@@ -205,12 +208,12 @@ fun RemindersScreen(
                             val prox = state.placeProximity[place.id]
                             val hasCoords = place.latitude != 0.0 || place.longitude != 0.0
                             val statusLabel = when {
-                                prox?.viaHomeWifi == true -> "Home Wi-Fi"
-                                prox?.isInside == true -> "Here now"
+                                prox?.viaHomeWifi == true -> "Home Wi-Fi • Tap to remind"
+                                prox?.isInside == true -> "Here now • Tap to remind"
                                 prox?.distanceMeters != null -> "${prox.distanceMeters.roundToInt()}m away"
-                                place.isHomePlace && !hasCoords -> "Wi-Fi trigger"
-                                hasCoords -> "${place.radiusMeters}m radius"
-                                else -> "Pin GPS"
+                                place.isHomePlace && !hasCoords -> "Triggers on Home Wi-Fi"
+                                hasCoords -> "GPS ready • Tap to remind"
+                                else -> "Tap to remind"
                             }
                             Surface(
                                 shape = RoundedCornerShape(16.dp),
@@ -219,7 +222,13 @@ fun RemindersScreen(
                                 } else {
                                     MaterialTheme.colorScheme.surfaceContainerLow
                                 },
-                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .clickable {
+                                        onOpenAddReminder(ReminderTriggerType.LOCATION, place.id)
+                                    }
+                                    .testTag("place_chip_${place.id}")
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
@@ -271,10 +280,19 @@ fun RemindersScreen(
                     }
                 }
                 TextButton(
-                    onClick = onOpenAddReminder,
+                    onClick = {
+                        val defaultType = if (selectedFilter == ReminderFilter.LOCATION) {
+                            ReminderTriggerType.LOCATION
+                        } else {
+                            ReminderTriggerType.TIME
+                        }
+                        onOpenAddReminder(defaultType, null)
+                    },
                     modifier = Modifier.testTag("quick_add_reminder_button")
                 ) {
-                    Text("+ New")
+                    Icon(Icons.Filled.Add, null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(2.dp))
+                    Text("New")
                 }
             }
         }
@@ -293,19 +311,40 @@ fun RemindersScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text("No reminders here yet", style = MaterialTheme.typography.headlineSmall)
                         Text(
-                            text = "Set reminders triggered by time, arriving at Home or School, or both combined.",
+                            text = if (selectedFilter == ReminderFilter.LOCATION) {
+                                "No place reminders yet"
+                            } else {
+                                "No reminders here yet"
+                            },
+                            style = MaterialTheme.typography.headlineSmall
+                        )
+                        Text(
+                            text = if (selectedFilter == ReminderFilter.LOCATION) {
+                                "Example: \"Unpack lunchbox\" when arriving at Home, or \"Grab milk\" when arriving at Grocery Store."
+                            } else {
+                                "Set reminders for a specific time, when arriving at or leaving a place, or both."
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(Modifier.height(4.dp))
                         Button(
-                            onClick = onOpenAddReminder,
+                            onClick = {
+                                val defaultType = if (selectedFilter == ReminderFilter.LOCATION) {
+                                    ReminderTriggerType.LOCATION
+                                } else {
+                                    ReminderTriggerType.TIME
+                                }
+                                onOpenAddReminder(defaultType, null)
+                            },
                             shape = RoundedCornerShape(14.dp),
                             modifier = Modifier.testTag("empty_add_reminder_button")
                         ) {
-                            Text("Create Time or Location Reminder")
+                            Text(
+                                if (selectedFilter == ReminderFilter.LOCATION) "New Place Reminder"
+                                else "Create Reminder"
+                            )
                         }
                     }
                 }

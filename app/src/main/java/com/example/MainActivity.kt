@@ -10,19 +10,15 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -32,12 +28,16 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Restaurant
+import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.NotificationsNone
 import androidx.compose.material.icons.outlined.Restaurant
+import androidx.compose.material.icons.outlined.ShoppingCart
 import androidx.compose.material.icons.outlined.Tv
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -79,12 +79,13 @@ import com.example.ui.screens.CalendarScreen
 import com.example.ui.screens.ChoreEditorSheet
 import com.example.ui.screens.EventEditorSheet
 import com.example.ui.screens.HouseholdMeshScreen
-import com.example.ui.screens.KitchenScreen
 import com.example.ui.screens.LivePushReminderSheet
+import com.example.ui.screens.MealsScreen
 import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.PlaceEditorSheet
 import com.example.ui.screens.ReminderEditorSheet
 import com.example.ui.screens.RemindersScreen
+import com.example.ui.screens.ShoppingListScreen
 import com.example.ui.screens.TodayScreen
 import com.example.ui.screens.WallDisplayScreen
 import com.example.ui.theme.HomeListTheme
@@ -124,6 +125,7 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
     var showReminderEditor by remember { mutableStateOf(false) }
     var reminderInitialTitle by remember { mutableStateOf("") }
     var reminderInitialTrigger by remember { mutableStateOf(ReminderTriggerType.TIME) }
+    var reminderInitialPlaceId by remember { mutableStateOf<String?>(null) }
     var showLivePushSheet by remember { mutableStateOf(false) }
     var showPlaceEditor by remember { mutableStateOf(false) }
     var showEventEditor by remember { mutableStateOf(false) }
@@ -175,8 +177,14 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
         }
     }
 
-    val visibleTabs = remember(state.isParent) {
-        listOf(AppTab.TODAY, AppTab.KITCHEN, AppTab.REMINDERS, AppTab.CALENDAR, AppTab.HOUSEHOLD)
+    val bottomTabs = remember {
+        listOf(AppTab.TODAY, AppTab.SHOPPING, AppTab.MEALS, AppTab.REMINDERS, AppTab.CALENDAR)
+    }
+    val railTabs = remember {
+        listOf(AppTab.TODAY, AppTab.SHOPPING, AppTab.MEALS, AppTab.REMINDERS, AppTab.CALENDAR, AppTab.HOUSEHOLD)
+    }
+    val openShoppingCount = remember(state.groceryItems) {
+        state.groceryItems.count { !it.isChecked }
     }
 
     BackHandler(enabled = state.isConfigured && !showWallDisplay && currentTab != AppTab.TODAY) {
@@ -237,7 +245,13 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
                                             style = MaterialTheme.typography.titleLarge
                                         )
                                         Text(
-                                            text = if (state.isParent) "Parent Mode" else "Child Mode",
+                                            text = if (currentTab == AppTab.HOUSEHOLD) {
+                                                "Family Mesh & Settings"
+                                            } else if (state.isParent) {
+                                                "Parent Mode"
+                                            } else {
+                                                "Child Mode"
+                                            },
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -247,8 +261,46 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
                                     MeshStatusPill(
                                         status = state.meshStatus,
                                         peerCount = state.peers.size,
-                                        onClick = { viewModel.syncMeshNow() }
+                                        onClick = {
+                                            if (currentTab == AppTab.HOUSEHOLD) {
+                                                viewModel.syncMeshNow()
+                                            } else {
+                                                currentTab = AppTab.HOUSEHOLD
+                                            }
+                                        }
                                     )
+                                    IconButton(
+                                        onClick = {
+                                            currentTab = if (currentTab == AppTab.HOUSEHOLD) {
+                                                AppTab.TODAY
+                                            } else {
+                                                AppTab.HOUSEHOLD
+                                            }
+                                        },
+                                        modifier = Modifier.testTag("top_bar_household_button")
+                                    ) {
+                                        BadgedBox(
+                                            badge = {
+                                                if (state.availableUpdate != null) {
+                                                    Badge()
+                                                }
+                                            }
+                                        ) {
+                                            Icon(
+                                                imageVector = if (currentTab == AppTab.HOUSEHOLD) {
+                                                    Icons.Filled.Groups
+                                                } else {
+                                                    Icons.Outlined.Groups
+                                                },
+                                                contentDescription = "Household & Mesh settings",
+                                                tint = if (currentTab == AppTab.HOUSEHOLD) {
+                                                    MaterialTheme.colorScheme.primary
+                                                } else {
+                                                    MaterialTheme.colorScheme.onSurface
+                                                }
+                                            )
+                                        }
+                                    }
                                     IconButton(
                                         onClick = { showWallDisplay = true },
                                         modifier = Modifier.testTag("top_bar_wall_display_button")
@@ -264,19 +316,36 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
                         bottomBar = {
                             if (!isExpandedWidth) {
                                 NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-                                    visibleTabs.forEach { tab ->
+                                    bottomTabs.forEach { tab ->
                                         val selected = currentTab == tab
                                         val label = if (!state.isParent && tab == AppTab.CALENDAR) "My Week"
-                                        else if (!state.isParent && tab == AppTab.HOUSEHOLD) "Mesh"
                                         else tab.label
                                         NavigationBarItem(
                                             selected = selected,
                                             onClick = { currentTab = tab },
                                             icon = {
-                                                Icon(
-                                                    imageVector = tabIcon(tab, selected),
-                                                    contentDescription = label
-                                                )
+                                                if (tab == AppTab.SHOPPING && openShoppingCount > 0) {
+                                                    BadgedBox(
+                                                        badge = {
+                                                            Badge {
+                                                                Text(
+                                                                    if (openShoppingCount > 99) "99+"
+                                                                    else openShoppingCount.toString()
+                                                                )
+                                                            }
+                                                        }
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = tabIcon(tab, selected),
+                                                            contentDescription = label
+                                                        )
+                                                    }
+                                                } else {
+                                                    Icon(
+                                                        imageVector = tabIcon(tab, selected),
+                                                        contentDescription = label
+                                                    )
+                                                }
                                             },
                                             label = { Text(label) },
                                             modifier = Modifier.testTag("nav_tab_${tab.name.lowercase()}")
@@ -286,7 +355,10 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
                             }
                         },
                         floatingActionButton = {
-                            if (currentTab != AppTab.HOUSEHOLD && currentTab != AppTab.KITCHEN) {
+                            if (currentTab != AppTab.HOUSEHOLD &&
+                                currentTab != AppTab.MEALS &&
+                                currentTab != AppTab.SHOPPING
+                            ) {
                                 Box {
                                     FloatingActionButton(
                                         onClick = {
@@ -294,6 +366,7 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
                                                 currentTab == AppTab.REMINDERS -> {
                                                     reminderInitialTitle = ""
                                                     reminderInitialTrigger = ReminderTriggerType.TIME
+                                                    reminderInitialPlaceId = null
                                                     showReminderEditor = true
                                                 }
                                                 currentTab == AppTab.CALENDAR -> {
@@ -304,6 +377,7 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
                                                 else -> {
                                                     reminderInitialTitle = ""
                                                     reminderInitialTrigger = ReminderTriggerType.TIME
+                                                    reminderInitialPlaceId = null
                                                     showReminderEditor = true
                                                 }
                                             }
@@ -338,11 +412,12 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
                                             modifier = Modifier.testTag("fab_menu_chore")
                                         )
                                         DropdownMenuItem(
-                                            text = { Text("Time / Location Reminder") },
+                                            text = { Text("Time / Place Reminder") },
                                             onClick = {
                                                 showFabMenu = false
                                                 reminderInitialTitle = ""
                                                 reminderInitialTrigger = ReminderTriggerType.TIME
+                                                reminderInitialPlaceId = null
                                                 showReminderEditor = true
                                             },
                                             modifier = Modifier.testTag("fab_menu_reminder")
@@ -371,16 +446,25 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
                                     containerColor = MaterialTheme.colorScheme.surface,
                                     modifier = Modifier.fillMaxHeight()
                                 ) {
-                                    visibleTabs.forEach { tab ->
+                                    railTabs.forEach { tab ->
                                         val selected = currentTab == tab
                                         val label = if (!state.isParent && tab == AppTab.CALENDAR) "My Week"
-                                        else if (!state.isParent && tab == AppTab.HOUSEHOLD) "Mesh"
                                         else tab.label
                                         NavigationRailItem(
                                             selected = selected,
                                             onClick = { currentTab = tab },
                                             icon = {
-                                                Icon(tabIcon(tab, selected), contentDescription = label)
+                                                if (tab == AppTab.SHOPPING && openShoppingCount > 0) {
+                                                    BadgedBox(
+                                                        badge = {
+                                                            Badge { Text(openShoppingCount.toString()) }
+                                                        }
+                                                    ) {
+                                                        Icon(tabIcon(tab, selected), contentDescription = label)
+                                                    }
+                                                } else {
+                                                    Icon(tabIcon(tab, selected), contentDescription = label)
+                                                }
                                             },
                                             label = { Text(label) }
                                         )
@@ -415,13 +499,22 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
                                                 showChoreEditor = true
                                             },
                                             onOpenLivePush = { showLivePushSheet = true },
-                                            onNavigateKitchen = { currentTab = AppTab.KITCHEN },
+                                            onNavigateShopping = { currentTab = AppTab.SHOPPING },
+                                            onNavigateMeals = { currentTab = AppTab.MEALS },
                                             onNavigateReminders = { currentTab = AppTab.REMINDERS },
                                             onNavigateCalendar = { currentTab = AppTab.CALENDAR },
                                             onDismissUpdateBanner = { viewModel.dismissUpdateBanner(it) }
                                         )
 
-                                        AppTab.KITCHEN -> KitchenScreen(
+                                        AppTab.SHOPPING -> ShoppingListScreen(
+                                            state = state,
+                                            onAddItem = { name -> viewModel.addGroceryItem(name) },
+                                            onToggleItem = { viewModel.toggleGroceryItem(it) },
+                                            onDeleteItem = { viewModel.deleteGroceryItem(it) },
+                                            onClearChecked = { viewModel.clearCheckedGroceries() }
+                                        )
+
+                                        AppTab.MEALS -> MealsScreen(
                                             state = state,
                                             onProposeMeal = { dateKey, mealName, mealSlot, notes ->
                                                 viewModel.proposeDinnerOption(dateKey, mealName, mealSlot, notes)
@@ -429,11 +522,7 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
                                             onUpdateMeal = { viewModel.updateDinnerOption(it) },
                                             onToggleMealVote = { viewModel.toggleDinnerVote(it) },
                                             onSetMealWinner = { viewModel.setDinnerWinner(it) },
-                                            onDeleteMealOption = { viewModel.deleteDinnerOption(it) },
-                                            onAddShoppingItem = { name -> viewModel.addGroceryItem(name) },
-                                            onToggleShoppingItem = { viewModel.toggleGroceryItem(it) },
-                                            onDeleteShoppingItem = { viewModel.deleteGroceryItem(it) },
-                                            onClearCheckedShopping = { viewModel.clearCheckedGroceries() }
+                                            onDeleteMealOption = { viewModel.deleteDinnerOption(it) }
                                         )
 
                                         AppTab.REMINDERS -> RemindersScreen(
@@ -466,9 +555,10 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
                                                     viewModel.showMessage("Checked location against saved places")
                                                 }
                                             },
-                                            onOpenAddReminder = {
+                                            onOpenAddReminder = { triggerType, placeId ->
                                                 reminderInitialTitle = ""
-                                                reminderInitialTrigger = ReminderTriggerType.TIME
+                                                reminderInitialTrigger = triggerType
+                                                reminderInitialPlaceId = placeId
                                                 showReminderEditor = true
                                             },
                                             onOpenAddPlace = {
@@ -512,6 +602,7 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
                                             },
                                             onCheckForUpdates = { viewModel.checkForUpdates(silent = false) },
                                             onUpdateReleaseUrl = { viewModel.updateReleaseUrl(it) },
+                                            onUpdateHubUrl = { viewModel.updateHubUrl(it) },
                                             onToggleDarkTheme = { viewModel.toggleDarkTheme() },
                                             onLeaveHousehold = {
                                                 currentTab = AppTab.TODAY
@@ -545,10 +636,16 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
                             defaultAssigneeId = if (state.isParent) null else state.config?.selfMemberId,
                             initialTitle = reminderInitialTitle,
                             initialTriggerType = reminderInitialTrigger,
+                            initialPlaceId = reminderInitialPlaceId,
+                            onOpenAddPlace = {
+                                viewModel.clearPinnedCoordinates()
+                                showPlaceEditor = true
+                            },
                             onDismiss = {
                                 showReminderEditor = false
                                 reminderInitialTitle = ""
                                 reminderInitialTrigger = ReminderTriggerType.TIME
+                                reminderInitialPlaceId = null
                             },
                             onSave = { viewModel.saveReminder(it) }
                         )
@@ -577,6 +674,7 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
                                 )
                             },
                             onPinCurrentGps = { viewModel.pinCurrentGpsLocation() },
+                            onSearchAddress = { viewModel.searchAddressCoordinates(it) },
                             onDismiss = { showPlaceEditor = false },
                             onSave = { viewModel.savePlace(it) }
                         )
@@ -600,7 +698,8 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
 
 private fun tabIcon(tab: AppTab, selected: Boolean) = when (tab) {
     AppTab.TODAY -> if (selected) Icons.Filled.CheckCircle else Icons.Outlined.CheckCircle
-    AppTab.KITCHEN -> if (selected) Icons.Filled.Restaurant else Icons.Outlined.Restaurant
+    AppTab.SHOPPING -> if (selected) Icons.Filled.ShoppingCart else Icons.Outlined.ShoppingCart
+    AppTab.MEALS -> if (selected) Icons.Filled.Restaurant else Icons.Outlined.Restaurant
     AppTab.REMINDERS -> if (selected) Icons.Filled.NotificationsActive else Icons.Outlined.NotificationsNone
     AppTab.CALENDAR -> if (selected) Icons.Filled.CalendarMonth else Icons.Outlined.CalendarMonth
     AppTab.HOUSEHOLD -> if (selected) Icons.Filled.Groups else Icons.Outlined.Groups

@@ -246,7 +246,7 @@ fun MeshStatusPill(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val isLive = status.serverRunning && status.activeWifiPeers > 0
+    val isLive = (status.serverRunning && status.activeWifiPeers > 0) || status.hubConnected
     val container = if (isLive) {
         MaterialTheme.colorScheme.secondaryContainer
     } else {
@@ -259,7 +259,9 @@ fun MeshStatusPill(
     }
     val label = when {
         status.isSyncing -> "Syncing..."
+        status.activeWifiPeers > 0 && status.hubConnected -> "Wi-Fi + Hub"
         status.activeWifiPeers > 0 -> "Wi-Fi • ${status.activeWifiPeers} peer${if (status.activeWifiPeers == 1) "" else "s"}"
+        status.hubConnected -> "Home Hub"
         status.serverRunning -> "Wi-Fi • ${peerCount} node${if (peerCount == 1) "" else "s"}"
         else -> "Local offline"
     }
@@ -400,7 +402,17 @@ fun ChoreChecklistCard(
                         text = buildString {
                             append(assignee?.displayName ?: "Anyone")
                             append(" • ")
-                            append(DateStreakUtils.formatDaysSummary(chore.daysOfWeekCsv))
+                            if (chore.isRecurring) {
+                                append(DateStreakUtils.formatDaysSummary(chore.daysOfWeekCsv))
+                            } else {
+                                val today = DateStreakUtils.todayKey()
+                                when {
+                                    chore.dueDateKey.isBlank() -> append("One-off")
+                                    chore.dueDateKey == today -> append("One-off • Today")
+                                    chore.dueDateKey < today -> append("One-off • Overdue")
+                                    else -> append("One-off • ${chore.dueDateKey}")
+                                }
+                            }
                             if (chore.remindersEnabled && chore.reminderHour in 0..23) {
                                 append(" • ")
                                 append(DateStreakUtils.formatTime12h(chore.reminderHour, chore.reminderMinute))

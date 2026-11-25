@@ -17,9 +17,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Autorenew
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Event
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -72,8 +78,23 @@ fun ChoreEditorSheet(
     onDelete: ((ChoreEntity) -> Unit)? = null
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val todayKey = remember { DateStreakUtils.todayKey() }
+    val tomorrowKey = remember(todayKey) { DateStreakUtils.shiftDateKey(todayKey, 1) }
+    val weekendKey = remember(todayKey) {
+        val iso = DateStreakUtils.isoDayOfWeek(todayKey)
+        val daysUntilSat = if (iso <= 6) 6 - iso else 6
+        DateStreakUtils.shiftDateKey(todayKey, daysUntilSat)
+    }
+
     var title by remember(editingChore) { mutableStateOf(editingChore?.title.orEmpty()) }
     var notes by remember(editingChore) { mutableStateOf(editingChore?.notes.orEmpty()) }
+    var isRecurring by remember(editingChore) { mutableStateOf(editingChore?.isRecurring ?: true) }
+    var dueDateKey by remember(editingChore) {
+        mutableStateOf(
+            if (editingChore != null && !editingChore.isRecurring) editingChore.dueDateKey
+            else todayKey
+        )
+    }
     var category by remember(editingChore) {
         mutableStateOf(ChoreCategory.fromString(editingChore?.category))
     }
@@ -95,7 +116,7 @@ fun ChoreEditorSheet(
         )
     }
     val rotationAnchor = remember(editingChore) {
-        editingChore?.rotationAnchorDateKey?.ifBlank { DateStreakUtils.todayKey() } ?: DateStreakUtils.todayKey()
+        editingChore?.rotationAnchorDateKey?.ifBlank { todayKey } ?: todayKey
     }
     var timeOfDay by remember(editingChore) {
         mutableStateOf(TimeOfDay.fromString(editingChore?.timeOfDay))
@@ -143,7 +164,12 @@ fun ChoreEditorSheet(
                 value = title,
                 onValueChange = { title = it },
                 label = { Text("Chore title") },
-                placeholder = { Text("e.g., Empty dishwasher, Feed dog") },
+                placeholder = {
+                    Text(
+                        if (isRecurring) "e.g., Empty dishwasher, Feed dog"
+                        else "e.g., Rake the yard, Clean garage"
+                    )
+                },
                 singleLine = true,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -158,26 +184,64 @@ fun ChoreEditorSheet(
                 modifier = Modifier.fillMaxWidth()
             )
 
-            Text("Assignment", style = MaterialTheme.typography.labelLarge)
+            Text("Schedule type", style = MaterialTheme.typography.labelLarge)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
-                    selected = !useRotation,
-                    onClick = { useRotation = false },
-                    label = { Text("Fixed Person") },
-                    modifier = Modifier.testTag("chore_assign_fixed")
+                    selected = isRecurring,
+                    onClick = { isRecurring = true },
+                    leadingIcon = {
+                        Icon(Icons.Filled.Repeat, contentDescription = null, modifier = Modifier.size(16.dp))
+                    },
+                    label = { Text("Recurring") },
+                    modifier = Modifier.testTag("chore_schedule_recurring")
                 )
                 FilterChip(
-                    selected = useRotation,
-                    onClick = { useRotation = true },
-                    leadingIcon = {
-                        Icon(Icons.Filled.Autorenew, contentDescription = null, modifier = Modifier.size(16.dp))
+                    selected = !isRecurring,
+                    onClick = {
+                        isRecurring = false
+                        useRotation = false
                     },
-                    label = { Text("Rotating Turns") },
-                    modifier = Modifier.testTag("chore_assign_rotate")
+                    leadingIcon = {
+                        Icon(Icons.Filled.Event, contentDescription = null, modifier = Modifier.size(16.dp))
+                    },
+                    label = { Text("One-Off") },
+                    modifier = Modifier.testTag("chore_schedule_one_off")
                 )
             }
+            Text(
+                text = if (isRecurring) {
+                    "Repeats automatically on your chosen days of the week."
+                } else {
+                    "Shows up once (like \"Rake the yard\") and disappears after it's checked off."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
 
-            if (!useRotation) {
+            if (isRecurring) {
+                Text("Assignment", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = !useRotation,
+                        onClick = { useRotation = false },
+                        label = { Text("Fixed Person") },
+                        modifier = Modifier.testTag("chore_assign_fixed")
+                    )
+                    FilterChip(
+                        selected = useRotation,
+                        onClick = { useRotation = true },
+                        leadingIcon = {
+                            Icon(Icons.Filled.Autorenew, contentDescription = null, modifier = Modifier.size(16.dp))
+                        },
+                        label = { Text("Rotating Turns") },
+                        modifier = Modifier.testTag("chore_assign_rotate")
+                    )
+                }
+            } else {
+                Text("Assigned to", style = MaterialTheme.typography.labelLarge)
+            }
+
+            if (!isRecurring || !useRotation) {
                 Row(
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -244,12 +308,12 @@ fun ChoreEditorSheet(
                         rotationMemberIdsCsv = rotationMembers.joinToString(","),
                         rotationCadence = rotationCadence.name,
                         rotationAnchorDateKey = rotationAnchor,
+                        isRecurring = true,
                         daysOfWeekCsv = selectedDays.sorted().joinToString(",")
                     )
-                    val today = DateStreakUtils.todayKey()
                     val membersById = members.associateBy { it.id }
-                    val todayPerson = previewChore.effectiveAssigneeForDate(today)?.let { membersById[it]?.displayName }
-                    val nextPerson = previewChore.nextAssigneeAfterDate(today)?.let { membersById[it]?.displayName }
+                    val todayPerson = previewChore.effectiveAssigneeForDate(todayKey)?.let { membersById[it]?.displayName }
+                    val nextPerson = previewChore.nextAssigneeAfterDate(todayKey)?.let { membersById[it]?.displayName }
                     Surface(
                         shape = RoundedCornerShape(12.dp),
                         color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f),
@@ -312,8 +376,43 @@ fun ChoreEditorSheet(
                 }
             }
 
-            Text("Repeat days", style = MaterialTheme.typography.labelLarge)
-            DayOfWeekSelectorRow(selectedDays = selectedDays, onChange = { selectedDays = it })
+            if (isRecurring) {
+                Text("Repeat days", style = MaterialTheme.typography.labelLarge)
+                DayOfWeekSelectorRow(selectedDays = selectedDays, onChange = { selectedDays = it })
+            } else {
+                Text("When", style = MaterialTheme.typography.labelLarge)
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = dueDateKey == todayKey,
+                        onClick = { dueDateKey = todayKey },
+                        label = { Text("Today") },
+                        modifier = Modifier.testTag("one_off_when_today")
+                    )
+                    FilterChip(
+                        selected = dueDateKey == tomorrowKey,
+                        onClick = { dueDateKey = tomorrowKey },
+                        label = { Text("Tomorrow") },
+                        modifier = Modifier.testTag("one_off_when_tomorrow")
+                    )
+                    if (weekendKey != todayKey && weekendKey != tomorrowKey) {
+                        FilterChip(
+                            selected = dueDateKey == weekendKey,
+                            onClick = { dueDateKey = weekendKey },
+                            label = { Text("This Weekend") },
+                            modifier = Modifier.testTag("one_off_when_weekend")
+                        )
+                    }
+                    FilterChip(
+                        selected = dueDateKey.isBlank(),
+                        onClick = { dueDateKey = "" },
+                        label = { Text("Anytime until done") },
+                        modifier = Modifier.testTag("one_off_when_anytime")
+                    )
+                }
+            }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -335,11 +434,11 @@ fun ChoreEditorSheet(
                 )
             }
 
-            val rotationValid = !useRotation || rotationMembers.size >= 2
+            val rotationValid = !isRecurring || !useRotation || rotationMembers.size >= 2
             Spacer(Modifier.height(4.dp))
             Button(
                 onClick = {
-                    val isRotActive = useRotation && rotationMembers.size >= 2
+                    val isRotActive = isRecurring && useRotation && rotationMembers.size >= 2
                     val entity = ChoreEntity(
                         id = editingChore?.id ?: UUID.randomUUID().toString(),
                         title = title.trim(),
@@ -349,7 +448,9 @@ fun ChoreEditorSheet(
                         rotationMemberIdsCsv = if (isRotActive) rotationMembers.joinToString(",") else "",
                         rotationCadence = if (isRotActive) rotationCadence.name else RotationCadence.NONE.name,
                         rotationAnchorDateKey = if (isRotActive) rotationAnchor else "",
-                        daysOfWeekCsv = selectedDays.sorted().joinToString(","),
+                        isRecurring = isRecurring,
+                        dueDateKey = if (isRecurring) "" else dueDateKey,
+                        daysOfWeekCsv = if (isRecurring) selectedDays.sorted().joinToString(",") else "",
                         timeOfDay = timeOfDay.name,
                         reminderHour = if (remindersEnabled) reminderHour else -1,
                         reminderMinute = if (remindersEnabled) reminderMinute else 0,
@@ -381,6 +482,8 @@ fun ReminderEditorSheet(
     defaultAssigneeId: String?,
     initialTitle: String = "",
     initialTriggerType: ReminderTriggerType = ReminderTriggerType.TIME,
+    initialPlaceId: String? = null,
+    onOpenAddPlace: () -> Unit,
     onDismiss: () -> Unit,
     onSave: (ReminderEntity) -> Unit
 ) {
@@ -392,8 +495,29 @@ fun ReminderEditorSheet(
     var hour by remember { mutableIntStateOf(16) }
     var minute by remember { mutableIntStateOf(0) }
     var repeatDays by remember { mutableStateOf(setOf<Int>()) }
-    var selectedPlaceId by remember { mutableStateOf(places.firstOrNull()?.id) }
+    var selectedPlaceId by remember(initialPlaceId, places) {
+        mutableStateOf(
+            initialPlaceId?.takeIf { id -> places.any { it.id == id } }
+                ?: places.firstOrNull()?.id
+        )
+    }
+    var knownPlaceIds by remember { mutableStateOf(places.map { it.id }.toSet()) }
     var transition by remember { mutableStateOf(PlaceTransition.ARRIVE) }
+
+    // If the user adds a brand-new place inline, automatically select it right away.
+    LaunchedEffect(places) {
+        val newlyAdded = places.firstOrNull { it.id !in knownPlaceIds }
+        if (newlyAdded != null) {
+            selectedPlaceId = newlyAdded.id
+        } else if (selectedPlaceId == null && places.isNotEmpty()) {
+            selectedPlaceId = places.first().id
+        }
+        knownPlaceIds = places.map { it.id }.toSet()
+    }
+
+    val selectedPlace = places.firstOrNull { it.id == selectedPlaceId }
+    val selectedMemberName = members.firstOrNull { it.id == assignedId }?.displayName ?: "Everyone"
+    val needsPlace = triggerType == ReminderTriggerType.LOCATION || triggerType == ReminderTriggerType.TIME_AND_LOCATION
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(
@@ -404,13 +528,18 @@ fun ReminderEditorSheet(
                 .navigationBarsPadding(),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text("New Smart Reminder", style = MaterialTheme.typography.headlineSmall)
+            Text("New Reminder", style = MaterialTheme.typography.headlineSmall)
 
             OutlinedTextField(
                 value = title,
                 onValueChange = { title = it },
                 label = { Text("What should we remember?") },
-                placeholder = { Text("e.g., Unpack lunchbox, Grab milk") },
+                placeholder = {
+                    Text(
+                        if (needsPlace) "e.g., Unpack lunchbox, Grab cat food"
+                        else "e.g., Take out trash, Call grandma"
+                    )
+                },
                 singleLine = true,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -425,21 +554,119 @@ fun ReminderEditorSheet(
                 modifier = Modifier.fillMaxWidth()
             )
 
-            Text("Trigger by", style = MaterialTheme.typography.labelLarge)
+            Text("When should it alert?", style = MaterialTheme.typography.labelLarge)
             Row(
                 modifier = Modifier.horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 listOf(
-                    ReminderTriggerType.TIME,
-                    ReminderTriggerType.LOCATION,
-                    ReminderTriggerType.TIME_AND_LOCATION
-                ).forEach { type ->
+                    ReminderTriggerType.TIME to "At a Time",
+                    ReminderTriggerType.LOCATION to "At a Place",
+                    ReminderTriggerType.TIME_AND_LOCATION to "Time + Place"
+                ).forEach { (type, friendlyLabel) ->
                     FilterChip(
                         selected = triggerType == type,
                         onClick = { triggerType = type },
-                        label = { Text(type.label) },
+                        label = { Text(friendlyLabel) },
                         modifier = Modifier.testTag("trigger_type_${type.name.lowercase()}")
+                    )
+                }
+            }
+
+            // Plain-English live preview so location triggers are crystal clear
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = if (needsPlace) Icons.Filled.LocationOn else Icons.Filled.NotificationsActive,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    val previewText = when (triggerType) {
+                        ReminderTriggerType.TIME -> {
+                            "Remind $selectedMemberName at ${DateStreakUtils.formatTime12h(hour, minute)}"
+                        }
+                        ReminderTriggerType.LOCATION -> {
+                            val placeName = selectedPlace?.name ?: "a place (pick below)"
+                            val action = if (transition == PlaceTransition.ARRIVE) "arriving at" else "leaving"
+                            "Remind $selectedMemberName when $action $placeName"
+                        }
+                        ReminderTriggerType.TIME_AND_LOCATION -> {
+                            val placeName = selectedPlace?.name ?: "a place"
+                            val action = if (transition == PlaceTransition.ARRIVE) "arriving at" else "leaving"
+                            "Remind $selectedMemberName after ${DateStreakUtils.formatTime12h(hour, minute)} when $action $placeName"
+                        }
+                        ReminderTriggerType.NUDGE -> "Remind $selectedMemberName"
+                    }
+                    Text(
+                        text = previewText,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                }
+            }
+
+            if (needsPlace) {
+                Text("1. Choose action", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = transition == PlaceTransition.ARRIVE,
+                        onClick = { transition = PlaceTransition.ARRIVE },
+                        label = { Text("When arriving") }
+                    )
+                    FilterChip(
+                        selected = transition == PlaceTransition.LEAVE,
+                        onClick = { transition = PlaceTransition.LEAVE },
+                        label = { Text("When leaving") }
+                    )
+                }
+
+                Text("2. Choose place", style = MaterialTheme.typography.labelLarge)
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    places.forEach { place ->
+                        FilterChip(
+                            selected = selectedPlaceId == place.id,
+                            onClick = { selectedPlaceId = place.id },
+                            label = { Text(place.name) }
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = onOpenAddPlace,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.testTag("inline_add_place_button")
+                    ) {
+                        Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("New Place")
+                    }
+                }
+                if (selectedPlace != null) {
+                    val hasCoords = selectedPlace.latitude != 0.0 || selectedPlace.longitude != 0.0
+                    Text(
+                        text = when {
+                            selectedPlace.isHomePlace && !hasCoords ->
+                                "Home automatically triggers when your phone connects to home Wi-Fi."
+                            hasCoords ->
+                                "Triggers via GPS within ${selectedPlace.radiusMeters}m of ${selectedPlace.name}."
+                            else ->
+                                "Tip: Add an address or GPS pin for ${selectedPlace.name} so it triggers automatically."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -447,7 +674,7 @@ fun ReminderEditorSheet(
             if (triggerType == ReminderTriggerType.TIME || triggerType == ReminderTriggerType.TIME_AND_LOCATION) {
                 Text(
                     text = if (triggerType == ReminderTriggerType.TIME_AND_LOCATION) {
-                        "Active starting at time"
+                        "3. Active starting at time"
                     } else {
                         "Reminder time"
                     },
@@ -461,43 +688,8 @@ fun ReminderEditorSheet(
                         minute = m
                     }
                 )
-                Text("Repeat days (leave empty for today/one-off)", style = MaterialTheme.typography.labelMedium)
+                Text("Repeat days (optional — leave empty for one-off)", style = MaterialTheme.typography.labelMedium)
                 DayOfWeekSelectorRow(selectedDays = repeatDays, onChange = { repeatDays = it })
-            }
-
-            if (triggerType == ReminderTriggerType.LOCATION || triggerType == ReminderTriggerType.TIME_AND_LOCATION) {
-                Text("When", style = MaterialTheme.typography.labelLarge)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PlaceTransition.entries.forEach { tr ->
-                        FilterChip(
-                            selected = transition == tr,
-                            onClick = { transition = tr },
-                            label = { Text(tr.label) }
-                        )
-                    }
-                }
-
-                Text("Saved Place", style = MaterialTheme.typography.labelLarge)
-                if (places.isEmpty()) {
-                    Text(
-                        text = "Pin a family place first on the Reminders tab.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                } else {
-                    Row(
-                        modifier = Modifier.horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        places.forEach { place ->
-                            FilterChip(
-                                selected = selectedPlaceId == place.id,
-                                onClick = { selectedPlaceId = place.id },
-                                label = { Text(place.name) }
-                            )
-                        }
-                    }
-                }
             }
 
             Text("For", style = MaterialTheme.typography.labelLarge)
@@ -519,7 +711,6 @@ fun ReminderEditorSheet(
                 }
             }
 
-            val needsPlace = triggerType == ReminderTriggerType.LOCATION || triggerType == ReminderTriggerType.TIME_AND_LOCATION
             Button(
                 onClick = {
                     val entity = ReminderEntity(
@@ -560,15 +751,20 @@ fun PlaceEditorSheet(
     hasLocationPermission: Boolean,
     onRequestLocationPermission: () -> Unit,
     onPinCurrentGps: () -> Unit,
+    onSearchAddress: (String) -> Unit,
     onDismiss: () -> Unit,
     onSave: (SavedPlaceEntity) -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var name by remember { mutableStateOf("") }
+    var addressQuery by remember { mutableStateOf("") }
     var latText by remember { mutableStateOf("") }
     var lonText by remember { mutableStateOf("") }
+    var showManualCoords by remember { mutableStateOf(false) }
     var radius by remember { mutableFloatStateOf(200f) }
     var isHomePlace by remember { mutableStateOf(false) }
+
+    val quickPresets = remember { listOf("Home", "School", "Grocery Store", "Work", "Park") }
 
     LaunchedEffect(pinnedCoords) {
         if (pinnedCoords != null) {
@@ -576,6 +772,8 @@ fun PlaceEditorSheet(
             lonText = String.format(java.util.Locale.US, "%.5f", pinnedCoords.second)
         }
     }
+
+    val hasValidCoords = (latText.toDoubleOrNull() ?: 0.0) != 0.0 || (lonText.toDoubleOrNull() ?: 0.0) != 0.0
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(
@@ -586,20 +784,43 @@ fun PlaceEditorSheet(
                 .navigationBarsPadding(),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text("Pin a Family Place", style = MaterialTheme.typography.headlineSmall)
+            Text("Add a Family Place", style = MaterialTheme.typography.headlineSmall)
+            Text(
+                text = "Save a spot once — then anyone in the family can attach \"Arrive\" or \"Leave\" reminders to it.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                quickPresets.forEach { preset ->
+                    FilterChip(
+                        selected = name.equals(preset, ignoreCase = true),
+                        onClick = {
+                            name = preset
+                            isHomePlace = preset.equals("Home", ignoreCase = true)
+                        },
+                        label = { Text(preset) }
+                    )
+                }
+            }
 
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
                 label = { Text("Place name") },
-                placeholder = { Text("e.g., Home, School, Grocery Store") },
+                placeholder = { Text("e.g., Grocery Store, Soccer Field") },
                 singleLine = true,
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("place_name_input")
             )
 
-            OutlinedButton(
+            Text("Set where it is", style = MaterialTheme.typography.labelLarge)
+
+            Button(
                 onClick = {
                     if (!hasLocationPermission) {
                         onRequestLocationPermission()
@@ -614,28 +835,88 @@ fun PlaceEditorSheet(
             ) {
                 Icon(Icons.Filled.MyLocation, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Use Current GPS Location")
+                Text(if (hasLocationPermission) "Use Where I Am Right Now" else "Allow GPS & Use Current Spot")
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 OutlinedTextField(
-                    value = latText,
-                    onValueChange = { latText = it },
-                    label = { Text("Latitude") },
+                    value = addressQuery,
+                    onValueChange = { addressQuery = it },
+                    label = { Text("Or search an address") },
+                    placeholder = { Text("e.g., 123 Main St, Austin TX") },
                     singleLine = true,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("place_address_search_input")
                 )
-                OutlinedTextField(
-                    value = lonText,
-                    onValueChange = { lonText = it },
-                    label = { Text("Longitude") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f)
-                )
+                OutlinedButton(
+                    onClick = { onSearchAddress(addressQuery) },
+                    enabled = addressQuery.isNotBlank(),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .height(54.dp)
+                        .testTag("place_address_search_button")
+                ) {
+                    Icon(Icons.Filled.Search, contentDescription = "Find address")
+                }
+            }
+
+            if (hasValidCoords) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.4f))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.CheckCircle,
+                            contentDescription = "Location pinned",
+                            tint = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = "Location pinned ($latText, $lonText)",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    }
+                }
+            }
+
+            TextButton(onClick = { showManualCoords = !showManualCoords }) {
+                Text(if (showManualCoords) "Hide manual coordinates" else "Enter coordinates manually")
+            }
+
+            if (showManualCoords) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = latText,
+                        onValueChange = { latText = it },
+                        label = { Text("Latitude") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = lonText,
+                        onValueChange = { lonText = it },
+                        label = { Text("Longitude") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
 
             Column {
-                Text("Trigger radius: ${radius.toInt()} meters", style = MaterialTheme.typography.labelLarge)
+                Text("Trigger distance: ${radius.toInt()} meters", style = MaterialTheme.typography.labelLarge)
                 Slider(
                     value = radius,
                     onValueChange = { radius = it },
@@ -650,9 +931,9 @@ fun PlaceEditorSheet(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Trigger on Home Wi-Fi reconnect", style = MaterialTheme.typography.bodyMedium)
+                    Text("Also trigger on Home Wi-Fi", style = MaterialTheme.typography.bodyMedium)
                     Text(
-                        text = "Fires 'Arrive at' reminders automatically when spotting family phones on home Wi-Fi",
+                        text = "Great for Home — fires automatically when your phone rejoins home Wi-Fi even without GPS",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -677,14 +958,14 @@ fun PlaceEditorSheet(
                     )
                     onDismiss()
                 },
-                enabled = name.isNotBlank(),
+                enabled = name.isNotBlank() && (hasValidCoords || isHomePlace),
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp)
                     .testTag("save_place_button"),
                 shape = RoundedCornerShape(16.dp)
             ) {
-                Text("Save Family Place")
+                Text("Save Place")
             }
             Spacer(Modifier.height(16.dp))
         }

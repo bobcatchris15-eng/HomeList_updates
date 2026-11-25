@@ -231,17 +231,22 @@ class MeshNodeServer(
 
         val week = DateStreakUtils.weekSlots(0)
         val completedIds = completions.filter { it.isCompleted }.map { it.id }.toSet()
+        val completedDatesByChore = completions
+            .filter { it.isCompleted }
+            .groupBy({ it.choreId }, { it.dateKey })
+            .mapValues { it.value.toSet() }
         val today = DateStreakUtils.todayKey()
-        val todayIso = DateStreakUtils.isoDayOfWeek(today)
 
-        val todayChores = chores.filter { it.isScheduledForDayOfWeek(todayIso) }
+        val todayChores = chores.filter {
+            it.isScheduledForDate(today, completedDatesByChore[it.id].orEmpty(), today)
+        }
         val overallDone = todayChores.count { "${it.id}_${today}" in completedIds }
 
         val memberSummaries = members.map { member ->
             val stats = DateStreakUtils.computeMemberStats(member.id, chores, completions, today)
             val cells = week.map { day ->
                 val sched = chores.filter {
-                    it.isScheduledForDayOfWeek(day.isoDayOfWeek) &&
+                    it.isScheduledForDate(day.dateKey, completedDatesByChore[it.id].orEmpty(), today) &&
                         it.effectiveAssigneeForDate(day.dateKey) == member.id
                 }
                 if (sched.isEmpty()) "none"

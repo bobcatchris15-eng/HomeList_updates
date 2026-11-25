@@ -10,4 +10,6 @@
     <string name="notification_channel_reminders_desc">Scheduled time and location reminders for chores and family tasks</string>
     <string name="notification_channel_nudges_name">Family Nudges</string>
     <string name="notification_channel_nudges_desc">Friendly chore reminders sent by parents over the household mesh</string>
+    <string name="notification_channel_updates_name">App Updates</string>
+    <string name="notification_channel_updates_desc">Nightly update alerts when a newer HomeList release is available</string>
 </resources>

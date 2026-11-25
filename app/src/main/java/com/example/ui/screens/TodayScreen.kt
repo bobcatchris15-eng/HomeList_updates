@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PriorityHigh
 import androidx.compose.material.icons.filled.Restaurant
+import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.outlined.Event
 import androidx.compose.material.icons.outlined.NotificationsNone
@@ -78,7 +79,8 @@ fun TodayScreen(
     onDismissNudge: (ReminderEntity) -> Unit,
     onOpenAddChore: () -> Unit,
     onOpenLivePush: () -> Unit,
-    onNavigateKitchen: () -> Unit,
+    onNavigateShopping: () -> Unit,
+    onNavigateMeals: () -> Unit,
     onNavigateReminders: () -> Unit,
     onNavigateCalendar: () -> Unit,
     onDismissUpdateBanner: (String) -> Unit,
@@ -86,17 +88,24 @@ fun TodayScreen(
 ) {
     val context = LocalContext.current
     val todayKey = remember { DateStreakUtils.todayKey() }
-    val todayIso = remember { DateStreakUtils.isoDayOfWeek(todayKey) }
     val completedSet = remember(state.completions, todayKey) {
         state.completions.filter { it.isCompleted && it.dateKey == todayKey }.map { it.choreId }.toSet()
+    }
+    val completedDatesByChore = remember(state.completions) {
+        state.completions
+            .filter { it.isCompleted }
+            .groupBy({ it.choreId }, { it.dateKey })
+            .mapValues { it.value.toSet() }
     }
     val membersById = remember(state.members) { state.members.associateBy { it.id } }
 
     var selectedMemberFilterId by remember { mutableStateOf<String?>(null) }
 
     val selfId = state.config?.selfMemberId.orEmpty()
-    val todayAllChores = remember(state.chores, todayIso) {
-        state.chores.filter { it.isScheduledForDayOfWeek(todayIso) }
+    val todayAllChores = remember(state.chores, completedDatesByChore, todayKey) {
+        state.chores.filter {
+            it.isScheduledForDate(todayKey, completedDatesByChore[it.id].orEmpty(), todayKey)
+        }
     }
 
     val visibleChores = remember(todayAllChores, state.isParent, selfId, selectedMemberFilterId, todayKey) {
@@ -511,73 +520,130 @@ fun TodayScreen(
             }
         }
 
-        // Tonight's Dinner & Kitchen Quick Glance Card
+        // Tonight's Dinner & Shopping Quick Glance Row
         item(key = "tonight_dinner_glance") {
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.surface,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onNavigateKitchen)
-                    .testTag("today_dinner_card")
-            ) {
-                Row(
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                        .clickable(onClick = onNavigateMeals)
+                        .testTag("today_dinner_card")
                 ) {
                     Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.weight(1f)
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.tertiaryContainer
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.weight(1f)
                         ) {
-                            Icon(
-                                imageVector = Icons.Filled.Restaurant,
-                                contentDescription = "Tonight's dinner",
-                                tint = MaterialTheme.colorScheme.onTertiaryContainer,
-                                modifier = Modifier.padding(10.dp)
-                            )
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.tertiaryContainer
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Restaurant,
+                                    contentDescription = "Tonight's dinner",
+                                    tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                    modifier = Modifier.padding(10.dp)
+                                )
+                            }
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    text = when {
+                                        tonightWinner != null -> "${tonightWinner.slot().label}: ${tonightWinner.mealName}"
+                                        tonightLeader != null -> "Meal Vote: ${tonightLeader.mealName}"
+                                        else -> "What's on the menu today?"
+                                    },
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = when {
+                                        tonightWinner != null -> "Planned"
+                                        tonightLeader != null -> "${tonightLeader.voteCount()} vote${if (tonightLeader.voteCount() == 1) "" else "s"} • ${tonightDinnerOptions.size} idea${if (tonightDinnerOptions.size == 1) "" else "s"}"
+                                        else -> "Tap to request or vote on meals"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
-                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(
-                                text = when {
-                                    tonightWinner != null -> "${tonightWinner.slot().label}: ${tonightWinner.mealName}"
-                                    tonightLeader != null -> "Meal Vote: ${tonightLeader.mealName}"
-                                    else -> "What's on the menu today?"
-                                },
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = buildString {
-                                    when {
-                                        tonightWinner != null -> append("Planned")
-                                        tonightLeader != null -> append("${tonightLeader.voteCount()} vote${if (tonightLeader.voteCount() == 1) "" else "s"} • ${tonightDinnerOptions.size} idea${if (tonightDinnerOptions.size == 1) "" else "s"}")
-                                        else -> append("Tap to request or vote")
-                                    }
-                                    if (groceriesRemaining > 0) {
-                                        append(" • $groceriesRemaining on shopping list")
-                                    }
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = "Open Meals",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                if (groceriesRemaining > 0) {
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(onClick = onNavigateShopping)
+                            .testTag("today_shopping_card")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.secondaryContainer
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.ShoppingCart,
+                                        contentDescription = "Shopping list",
+                                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        modifier = Modifier.padding(10.dp)
+                                    )
+                                }
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(
+                                        text = "$groceriesRemaining item${if (groceriesRemaining == 1) "" else "s"} on Shopping List",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = state.groceryItems
+                                            .filter { !it.isChecked }
+                                            .take(3)
+                                            .joinToString(", ") { it.name },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = "Open Shopping List",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = "Open Kitchen",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                 }
             }
         }

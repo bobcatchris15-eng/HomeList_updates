@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -29,6 +30,7 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.Logout
 import androidx.compose.material.icons.outlined.VpnKey
 import androidx.compose.material3.AlertDialog
@@ -50,6 +52,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -62,6 +65,7 @@ import com.example.ui.HomeListUiState
 import com.example.ui.components.MemberAvatarBadge
 import com.example.ui.components.iconForDeviceType
 import com.example.updates.AppUpdateChecker
+import com.example.updates.NightlyUpdateScheduler
 
 @Composable
 fun HouseholdMeshScreen(
@@ -70,6 +74,7 @@ fun HouseholdMeshScreen(
     onAddManualMember: (name: String, role: MemberRole, colorKey: String) -> Unit,
     onCheckForUpdates: () -> Unit,
     onUpdateReleaseUrl: (String) -> Unit,
+    onUpdateHubUrl: (String) -> Unit,
     onToggleDarkTheme: () -> Unit,
     onLeaveHousehold: () -> Unit,
     onShowMessage: (String) -> Unit,
@@ -81,6 +86,9 @@ fun HouseholdMeshScreen(
 
     var releaseUrlDraft by remember(config.updateReleaseUrl) {
         mutableStateOf(config.updateReleaseUrl.ifBlank { AppUpdateChecker.DEFAULT_RELEASES_URL })
+    }
+    var hubUrlDraft by remember(config.hubUrl) {
+        mutableStateOf(config.hubUrl)
     }
     var showAddMemberDialog by remember { mutableStateOf(false) }
     var showLeaveConfirmDialog by remember { mutableStateOf(false) }
@@ -124,7 +132,15 @@ fun HouseholdMeshScreen(
                         }
                         Surface(
                             shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.primaryContainer
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                    clipboard?.setPrimaryClip(ClipData.newPlainText("HomeList Pairing Code", config.pairingCode))
+                                    onShowMessage("Copied pairing code: ${config.pairingCode}")
+                                }
+                                .testTag("pairing_code_pill")
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -142,6 +158,12 @@ fun HouseholdMeshScreen(
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                                Icon(
+                                    Icons.Filled.ContentCopy,
+                                    contentDescription = "Tap to copy pairing code",
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                                    modifier = Modifier.size(14.dp)
                                 )
                             }
                         }
@@ -164,8 +186,8 @@ fun HouseholdMeshScreen(
                         OutlinedButton(
                             onClick = {
                                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                                clipboard?.setPrimaryClip(ClipData.newPlainText("HomeList Invite", pairingLink))
-                                onShowMessage("Copied invite link & pairing code")
+                                clipboard?.setPrimaryClip(ClipData.newPlainText("HomeList Pairing Code", config.pairingCode))
+                                onShowMessage("Copied pairing code: ${config.pairingCode}")
                             },
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier
@@ -174,7 +196,7 @@ fun HouseholdMeshScreen(
                         ) {
                             Icon(Icons.Filled.ContentCopy, null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text("Copy Invite")
+                            Text("Copy Code")
                         }
                         Button(
                             onClick = {
@@ -195,7 +217,7 @@ fun HouseholdMeshScreen(
                         ) {
                             Icon(Icons.Filled.Share, null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text("Share")
+                            Text("Share Invite")
                         }
                     }
                 }
@@ -286,6 +308,116 @@ fun HouseholdMeshScreen(
             }
         }
 
+        // Background Sync & Optional Windows Home Hub
+        item(key = "home_hub_card") {
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Computer,
+                                contentDescription = "Home Hub sync",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Column {
+                                Text("Background & Home Hub Sync", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    text = "Auto-syncs in background (~every 15 min)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        if (config.hubUrl.isNotBlank()) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (mesh.hubConnected) {
+                                    MaterialTheme.colorScheme.secondaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceContainerHigh
+                                }
+                            ) {
+                                Text(
+                                    text = if (mesh.hubConnected) "Hub Live" else "Hub Saved",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (mesh.hubConnected) {
+                                        MaterialTheme.colorScheme.onSecondaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = "Optional: run the Windows Home Hub on a home PC so family phones stay synced even away from home. Set it once here and every family phone picks it up automatically.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    if (state.isParent) {
+                        OutlinedTextField(
+                            value = hubUrlDraft,
+                            onValueChange = { hubUrlDraft = it },
+                            label = { Text("Optional Home Hub URL") },
+                            placeholder = { Text("https://hub.yourhome.com or 192.168.1.50:8765") },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("home_hub_url_input")
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = { onUpdateHubUrl(hubUrlDraft) },
+                                enabled = hubUrlDraft.isNotBlank() && !mesh.isSyncing,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("save_home_hub_button")
+                            ) {
+                                Text("Save & Test Hub")
+                            }
+                            if (config.hubUrl.isNotBlank()) {
+                                OutlinedButton(
+                                    onClick = {
+                                        hubUrlDraft = ""
+                                        onUpdateHubUrl("")
+                                    },
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.testTag("clear_home_hub_button")
+                                ) {
+                                    Text("Clear")
+                                }
+                            }
+                        }
+                    } else if (config.hubUrl.isNotBlank()) {
+                        AddressRow(
+                            label = "Away-from-home Hub",
+                            value = "Auto-configured by household"
+                        )
+                    }
+                }
+            }
+        }
+
         // Family Members & Add Member Option
         item(key = "family_members_card") {
             Surface(
@@ -352,9 +484,12 @@ fun HouseholdMeshScreen(
             }
         }
 
-        // App Updates (GitHub Releases + Obtainium + Mesh Broadcast)
+        // App Updates (Nightly Auto-Check + GitHub Releases + Mesh Broadcast)
         item(key = "app_updates_card") {
             val update = state.availableUpdate
+            val lastCheckedMs = remember(state.isCheckingUpdate, update) {
+                NightlyUpdateScheduler.lastCheckedTimeMs(context)
+            }
             Surface(
                 shape = RoundedCornerShape(22.dp),
                 color = MaterialTheme.colorScheme.surface,
@@ -405,7 +540,12 @@ fun HouseholdMeshScreen(
                     }
 
                     Text(
-                        text = "Family phones automatically alert each other when a newer version joins the mesh, or check GitHub Releases directly. Pair with Obtainium for one-tap updates.",
+                        text = buildString {
+                            append("Checks GitHub Releases automatically every night and sends a notification when a new update is ready.")
+                            if (lastCheckedMs > 0L) {
+                                append(" Last checked: ${DateStreakUtils.relativeTimeLabel(lastCheckedMs)}.")
+                            }
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -419,7 +559,7 @@ fun HouseholdMeshScreen(
                                 .weight(1f)
                                 .testTag("check_updates_button")
                         ) {
-                            Text(if (state.isCheckingUpdate) "Checking..." else "Check GitHub")
+                            Text(if (state.isCheckingUpdate) "Checking..." else "Check Now")
                         }
                         OutlinedButton(
                             onClick = {
@@ -437,25 +577,6 @@ fun HouseholdMeshScreen(
                             Spacer(Modifier.width(6.dp))
                             Text(if (update != null) "Get v${update.versionName}" else "Releases")
                         }
-                    }
-
-                    OutlinedButton(
-                        onClick = {
-                            val slug = AppUpdateChecker.extractGitHubRepoSlug(releaseUrlDraft)
-                                ?: AppUpdateChecker.DEFAULT_GITHUB_REPO
-                            val repoUrl = "https://github.com/$slug"
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                            clipboard?.setPrimaryClip(ClipData.newPlainText("HomeList GitHub Repo", repoUrl))
-                            onShowMessage("Copied $repoUrl for Obtainium")
-                        },
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("copy_obtainium_repo_button")
-                    ) {
-                        Icon(Icons.Filled.ContentCopy, null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Copy GitHub Repo URL for Obtainium")
                     }
 
                     if (state.isParent) {

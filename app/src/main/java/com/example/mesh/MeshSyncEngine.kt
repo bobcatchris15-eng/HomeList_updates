@@ -174,16 +174,50 @@ class MeshSyncEngine(
             }
         }
 
+    suspend fun probeHubHealth(rawUrl: String): Result<NodeHealthPayload> =
+        withContext(Dispatchers.IO) {
+            try {
+                val baseUrl = normalizeHubBaseUrl(rawUrl)
+                if (baseUrl.isBlank()) {
+                    return@withContext Result.failure(IllegalArgumentException("Enter a Home Hub URL"))
+                }
+                val req = Request.Builder()
+                    .url("$baseUrl/api/v1/health")
+                    .get()
+                    .build()
+                httpClient.newCall(req).execute().use { res ->
+                    val body = res.body?.string().orEmpty()
+                    if (!res.isSuccessful) {
+                        return@withContext Result.failure(IllegalStateException("Hub returned HTTP ${res.code}"))
+                    }
+                    val parsed = healthAdapter.fromJson(body)
+                        ?: return@withContext Result.failure(IllegalStateException("Invalid Home Hub response"))
+                    Result.success(parsed)
+                }
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+
     suspend fun joinViaPeer(
         host: String,
         port: Int,
         pairingCode: String
     ): Result<MeshGossipPayload> = withContext(Dispatchers.IO) {
         try {
-            val cleanHost = normalizeHost(host)
+            val trimmed = host.trim()
+            val targetUrl = if (
+                trimmed.startsWith("https://", ignoreCase = true) ||
+                trimmed.startsWith("http://", ignoreCase = true)
+            ) {
+                "${normalizeHubBaseUrl(trimmed)}/api/v1/gossip"
+            } else {
+                val cleanHost = normalizeHost(trimmed)
+                "http://$cleanHost:$port/api/v1/gossip"
+            }
             val emptyBody = "".toRequestBody(JSON_MEDIA_TYPE)
             val req = Request.Builder()
-                .url("http://$cleanHost:$port/api/v1/gossip")
+                .url(targetUrl)
                 .header("X-HomeList-Code", pairingCode.trim().uppercase())
                 .post(emptyBody)
                 .build()
@@ -240,6 +274,7 @@ class MeshSyncEngine(
 
         var syncedCount = 0
         var sawLanPeer = false
+        var hubSynced = false
         val jsonBody = gossipAdapter.toJson(payload)
 
         for ((host, port) in targets) {
@@ -273,19 +308,58 @@ class MeshSyncEngine(
             }
         }
 
+        // Optional Home Hub sync (works over Wi-Fi AND away from home on mobile data)
+        val normalizedHub = normalizeHubBaseUrl(config.hubUrl)
+        if (normalizedHub.isNotBlank()) {
+            try {
+                val latestPayload = repository.buildGossipPayload() ?: payload
+                val hubBody = gossipAdapter.toJson(latestPayload)
+                val req = Request.Builder()
+                    .url("$normalizedHub/api/v1/gossip")
+                    .header("X-HomeList-Code", config.pairingCode)
+                    .post(hubBody.toRequestBody(JSON_MEDIA_TYPE))
+                    .build()
+                httpClient.newCall(req).execute().use { res ->
+                    if (res.isSuccessful) {
+                        val responseText = res.body?.string().orEmpty()
+                        val incoming = gossipAdapter.fromJson(responseText)
+                        if (incoming != null &&
+                            (incoming.householdId.isBlank() || incoming.householdId == config.householdId)
+                        ) {
+                            val mergeResult = repository.mergeGossipPayload(incoming)
+                            if (mergeResult.newReminders.isNotEmpty()) {
+                                onIncomingReminders(mergeResult.newReminders)
+                            }
+                            if (mergeResult.fulfilledShoppingItems.isNotEmpty()) {
+                                onFulfilledShoppingItems(mergeResult.fulfilledShoppingItems)
+                            }
+                            hubSynced = true
+                            syncedCount++
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                // Optional Home Hub unreachable right now; local data & LAN mesh still work seamlessly
+            }
+        }
+
         if (sawLanPeer) {
             onHomeWifiPeerSeen()
         }
 
         val now = System.currentTimeMillis()
+        val lanSyncedCount = if (hubSynced) syncedCount - 1 else syncedCount
         _status.update {
             it.copy(
                 isSyncing = false,
                 activeWifiPeers = _discoveredNodes.value.size,
+                hubConnected = hubSynced,
                 lastSyncTimeMs = if (syncedCount > 0) now else it.lastSyncTimeMs,
                 lastSyncMessage = when {
+                    hubSynced && lanSyncedCount > 0 -> "Synced $lanSyncedCount peer${if (lanSyncedCount == 1) "" else "s"} + Home Hub"
+                    hubSynced -> "Synced via Home Hub"
                     syncedCount > 0 -> "Synced with $syncedCount peer${if (syncedCount == 1) "" else "s"}"
-                    targets.isEmpty() -> if (config.isFounder) "Waiting for family phones" else "No peers reachable"
+                    targets.isEmpty() && normalizedHub.isBlank() -> if (config.isFounder) "Waiting for family phones" else "No peers reachable"
                     !silent -> "Saved locally • peers offline"
                     else -> it.lastSyncMessage
                 }
@@ -498,6 +572,28 @@ class MeshSyncEngine(
                 .substringBefore("?")
                 .substringBefore(":")
                 .trim()
+        }
+
+        fun normalizeHubBaseUrl(raw: String): String {
+            val trimmed = raw.trim().trimEnd('/')
+            if (trimmed.isBlank()) return ""
+            val withScheme = when {
+                trimmed.startsWith("https://", ignoreCase = true) -> trimmed
+                trimmed.startsWith("http://", ignoreCase = true) -> trimmed
+                else -> {
+                    val hostPart = trimmed.substringBefore("/")
+                    val looksLikeLocalIp = hostPart.substringBefore(":").all { it.isDigit() || it == '.' }
+                    if (looksLikeLocalIp) {
+                        if (":" in hostPart) "http://$trimmed" else "http://$trimmed:8765"
+                    } else {
+                        "https://$trimmed"
+                    }
+                }
+            }
+            return withScheme
+                .removeSuffix("/api/v1/gossip")
+                .removeSuffix("/api/v1/health")
+                .trimEnd('/')
         }
 
         fun parsePairingUri(input: String): Triple<String, Int, String>? {

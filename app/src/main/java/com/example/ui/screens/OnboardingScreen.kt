@@ -41,7 +41,9 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -78,8 +80,17 @@ fun OnboardingScreen(
     modifier: Modifier = Modifier
 ) {
     var mode by remember { mutableStateOf(OnboardingMode.WELCOME) }
+    var userDismissedAutoJoin by remember { mutableStateOf(false) }
+
+    // Automatically assume Join mode if an existing HomeList node is spotted on home Wi-Fi
+    LaunchedEffect(discoveredNodes, mode, userDismissedAutoJoin) {
+        if (mode == OnboardingMode.WELCOME && !userDismissedAutoJoin && discoveredNodes.isNotEmpty()) {
+            mode = OnboardingMode.JOIN
+        }
+    }
 
     BackHandler(enabled = mode != OnboardingMode.WELCOME) {
+        if (mode == OnboardingMode.JOIN) userDismissedAutoJoin = true
         mode = OnboardingMode.WELCOME
     }
 
@@ -103,7 +114,10 @@ fun OnboardingScreen(
                 OnboardingMode.WELCOME -> {
                     WelcomeHeroSection(
                         discoveredCount = discoveredNodes.size,
-                        onFoundClick = { mode = OnboardingMode.FOUND },
+                        onFoundClick = {
+                            userDismissedAutoJoin = true
+                            mode = OnboardingMode.FOUND
+                        },
                         onJoinClick = { mode = OnboardingMode.JOIN }
                     )
                 }
@@ -121,7 +135,14 @@ fun OnboardingScreen(
                         discoveredNodes = discoveredNodes,
                         isJoining = isJoining,
                         isTablet = isTablet,
-                        onBack = { mode = OnboardingMode.WELCOME },
+                        onBack = {
+                            userDismissedAutoJoin = true
+                            mode = OnboardingMode.WELCOME
+                        },
+                        onSwitchToFound = {
+                            userDismissedAutoJoin = true
+                            mode = OnboardingMode.FOUND
+                        },
                         onSubmit = onJoinHousehold
                     )
                 }
@@ -321,6 +342,7 @@ private fun JoinGroupingSection(
     isJoining: Boolean,
     isTablet: Boolean,
     onBack: () -> Unit,
+    onSwitchToFound: () -> Unit,
     onSubmit: (String, String, String, MemberRole, String, Boolean) -> Unit
 ) {
     var peerAddress by remember { mutableStateOf("") }
@@ -328,59 +350,109 @@ private fun JoinGroupingSection(
     var displayName by remember { mutableStateOf("") }
     var role by remember { mutableStateOf(MemberRole.CHILD) }
     var selectedColor by remember { mutableStateOf("sage") }
+    var showManualAddress by remember { mutableStateOf(false) }
+
+    // Pre-select the best discovered HomeList node on Wi-Fi automatically
+    val bestNode = remember(discoveredNodes) {
+        discoveredNodes.firstOrNull { it.isFounder } ?: discoveredNodes.firstOrNull()
+    }
+    LaunchedEffect(bestNode) {
+        if (peerAddress.isBlank() && bestNode != null) {
+            peerAddress = "${bestNode.host}:${bestNode.port}"
+        }
+    }
+
+    val matchedNode = discoveredNodes.firstOrNull { "${it.host}:${it.port}" == peerAddress }
 
     Row(verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = onBack, modifier = Modifier.testTag("onboarding_back_button")) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
         }
-        Text("Join a Family", style = MaterialTheme.typography.headlineMedium)
+        Text(
+            text = matchedNode?.householdName?.takeIf { it.isNotBlank() }?.let { "Join $it" }
+                ?: "Join a Family",
+            style = MaterialTheme.typography.headlineMedium
+        )
     }
 
     if (discoveredNodes.isNotEmpty()) {
-        Text(
-            text = "Nearby on Home Wi-Fi",
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            discoveredNodes.forEach { node ->
-                val isSelected = peerAddress == "${node.host}:${node.port}"
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .clickable { peerAddress = "${node.host}:${node.port}" },
-                    shape = RoundedCornerShape(16.dp),
-                    color = if (isSelected) MaterialTheme.colorScheme.secondaryContainer
-                    else MaterialTheme.colorScheme.surface,
-                    border = BorderStroke(
-                        1.dp,
-                        if (isSelected) MaterialTheme.colorScheme.secondary
-                        else MaterialTheme.colorScheme.outlineVariant
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.secondaryContainer,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.45f)),
+            modifier = Modifier.testTag("auto_discovered_wifi_banner")
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Wifi,
+                    contentDescription = "Found family on Wi-Fi",
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Found ${matchedNode?.householdName?.ifBlank { "a HomeList family" } ?: "HomeList"} on Wi-Fi!",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
                     )
-                ) {
-                    Row(
-                        modifier = Modifier.padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                    Text(
+                        text = "Enter the 6-character pairing code from a family member's phone to join.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.85f)
+                    )
+                }
+            }
+        }
+
+        if (discoveredNodes.size > 1) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                discoveredNodes.forEach { node ->
+                    val isSelected = peerAddress == "${node.host}:${node.port}"
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable {
+                                peerAddress = "${node.host}:${node.port}"
+                                showManualAddress = false
+                            },
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (isSelected) MaterialTheme.colorScheme.secondaryContainer
+                        else MaterialTheme.colorScheme.surface,
+                        border = BorderStroke(
+                            1.dp,
+                            if (isSelected) MaterialTheme.colorScheme.secondary
+                            else MaterialTheme.colorScheme.outlineVariant
+                        )
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = node.householdName.ifBlank { node.displayName },
-                                style = MaterialTheme.typography.titleSmall
-                            )
-                            Text(
-                                text = "${node.displayName} • ${node.host}:${node.port}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        if (isSelected) {
-                            Icon(
-                                imageVector = Icons.Filled.Check,
-                                contentDescription = "Selected peer",
-                                tint = MaterialTheme.colorScheme.secondary
-                            )
+                        Row(
+                            modifier = Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = node.householdName.ifBlank { node.displayName },
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Text(
+                                    text = "${node.displayName} • ${node.host}:${node.port}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (isSelected) {
+                                Icon(
+                                    imageVector = Icons.Filled.Check,
+                                    contentDescription = "Selected peer",
+                                    tint = MaterialTheme.colorScheme.secondary
+                                )
+                            }
                         }
                     }
                 }
@@ -389,26 +461,16 @@ private fun JoinGroupingSection(
     }
 
     OutlinedTextField(
-        value = peerAddress,
+        value = pairingCode,
         onValueChange = { input ->
-            peerAddress = input
             val parsed = MeshSyncEngine.parsePairingUri(input)
             if (parsed != null) {
                 peerAddress = "${parsed.first}:${parsed.second}"
-                if (parsed.third.isNotBlank()) pairingCode = parsed.third
+                if (parsed.third.isNotBlank()) pairingCode = parsed.third.uppercase().take(8)
+            } else {
+                pairingCode = input.uppercase().take(8)
             }
         },
-        label = { Text("Peer Wi-Fi IP or pairing link") },
-        placeholder = { Text("e.g., 192.168.1.42:8765") },
-        singleLine = true,
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("join_address_input")
-    )
-
-    OutlinedTextField(
-        value = pairingCode,
-        onValueChange = { pairingCode = it.uppercase().take(8) },
         label = { Text("6-character pairing code") },
         placeholder = { Text("e.g., HL48K2") },
         singleLine = true,
@@ -427,6 +489,33 @@ private fun JoinGroupingSection(
             .fillMaxWidth()
             .testTag("join_name_input")
     )
+
+    if (discoveredNodes.isEmpty() || showManualAddress) {
+        OutlinedTextField(
+            value = peerAddress,
+            onValueChange = { input ->
+                peerAddress = input
+                val parsed = MeshSyncEngine.parsePairingUri(input)
+                if (parsed != null) {
+                    peerAddress = "${parsed.first}:${parsed.second}"
+                    if (parsed.third.isNotBlank()) pairingCode = parsed.third
+                }
+            },
+            label = { Text("Peer Wi-Fi IP or pairing link") },
+            placeholder = { Text("e.g., 192.168.1.42:8765") },
+            singleLine = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("join_address_input")
+        )
+    } else {
+        TextButton(
+            onClick = { showManualAddress = true },
+            modifier = Modifier.testTag("toggle_manual_address_button")
+        ) {
+            Text("Connecting to ${matchedNode?.displayName ?: peerAddress} • Enter IP manually instead")
+        }
+    }
 
     Text("Your role on this phone", style = MaterialTheme.typography.titleSmall)
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -466,6 +555,15 @@ private fun JoinGroupingSection(
         } else {
             Text("Connect & Join Family", style = MaterialTheme.typography.labelLarge)
         }
+    }
+
+    TextButton(
+        onClick = onSwitchToFound,
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("switch_to_found_family_button")
+    ) {
+        Text("Start a brand-new family instead")
     }
 }
 

@@ -226,11 +226,18 @@ object DateStreakUtils {
         val completedLookup = completions
             .filter { it.isCompleted }
             .associateBy { it.id }
+        val completedDatesByChore = completions
+            .filter { it.isCompleted }
+            .groupBy({ it.choreId }, { it.dateKey })
+            .mapValues { it.value.toSet() }
 
         fun dayStatus(dateKey: String): Pair<Int, Int> {
-            val isoDay = isoDayOfWeek(dateKey)
-            val scheduled = activeChores.filter {
-                it.isScheduledForDayOfWeek(isoDay) && it.effectiveAssigneeForDate(dateKey) == memberId
+            val scheduled = activeChores.filter { chore ->
+                chore.isScheduledForDate(
+                    dateKey = dateKey,
+                    completedDateKeysForChore = completedDatesByChore[chore.id].orEmpty(),
+                    todayKey = referenceDateKey
+                ) && chore.effectiveAssigneeForDate(dateKey) == memberId
             }
             if (scheduled.isEmpty()) return 0 to 0
             val done = scheduled.count { chore ->

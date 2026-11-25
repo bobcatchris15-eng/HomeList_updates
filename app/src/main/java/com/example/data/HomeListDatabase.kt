@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         DinnerOptionEntity::class,
         GroceryItemEntity::class
     ],
-    version = 5,
+    version = 7,
     exportSchema = false
 )
 abstract class HomeListDatabase : RoomDatabase() {
@@ -136,13 +136,32 @@ abstract class HomeListDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE chores ADD COLUMN isRecurring INTEGER NOT NULL DEFAULT 1"
+                )
+                db.execSQL(
+                    "ALTER TABLE chores ADD COLUMN dueDateKey TEXT NOT NULL DEFAULT ''"
+                )
+            }
+        }
+
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE node_config ADD COLUMN hubUrl TEXT NOT NULL DEFAULT ''"
+                )
+            }
+        }
+
         fun getInstance(context: Context): HomeListDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext,
                     HomeListDatabase::class.java,
                     "homelist_mesh.db"
-                ).addMigrations(MIGRATION_3_4, MIGRATION_4_5)
+                ).addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                     .fallbackToDestructiveMigrationFrom(dropAllTables = true, 1, 2)
                     .build()
                     .also { instance = it }

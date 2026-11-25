@@ -458,7 +458,8 @@ class HomeListRepository(private val dao: HomeListDao) {
             events = dao.getAllEvents(),
             dinnerOptions = dao.getAllDinnerOptions(),
             groceryItems = dao.getAllGroceryItems(),
-            updateReleaseUrl = config.updateReleaseUrl
+            updateReleaseUrl = config.updateReleaseUrl,
+            hubUrl = config.hubUrl
         )
     }
 
@@ -594,6 +595,7 @@ class HomeListRepository(private val dao: HomeListDao) {
                 config.copy(
                     householdName = payload.householdName.ifBlank { config.householdName },
                     updateReleaseUrl = payload.updateReleaseUrl.ifBlank { config.updateReleaseUrl },
+                    hubUrl = payload.hubUrl.ifBlank { config.hubUrl },
                     lastSyncedAt = now
                 )
             )

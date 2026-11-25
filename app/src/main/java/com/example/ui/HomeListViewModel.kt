@@ -2,8 +2,15 @@ package com.example.ui
 
 import android.app.Application
 import android.content.Intent
+import android.location.Geocoder
+import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import java.util.Locale
+import kotlin.coroutines.resume
 import com.example.BuildConfig
 import com.example.calendar.DeviceCalendarInfo
 import com.example.calendar.GoogleCalendarSyncBridge
@@ -29,6 +36,7 @@ import com.example.data.ReminderEntity
 import com.example.data.ReminderTriggerType
 import com.example.data.SavedPlaceEntity
 import com.example.mesh.DiscoveredMeshNode
+import com.example.mesh.MeshBackgroundSyncJobService
 import com.example.mesh.MeshRuntimeStatus
 import com.example.mesh.MeshSyncEngine
 import com.example.reminders.LocationReminderManager
@@ -36,6 +44,7 @@ import com.example.reminders.PlaceProximityInfo
 import com.example.reminders.ReminderNotificationHelper
 import com.example.updates.AppUpdateChecker
 import com.example.updates.AvailableUpdateInfo
+import com.example.updates.NightlyUpdateScheduler
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -48,7 +57,8 @@ import java.util.UUID
 
 enum class AppTab(val label: String) {
     TODAY("Today"),
-    KITCHEN("Kitchen"),
+    SHOPPING("Shopping"),
+    MEALS("Meals"),
     REMINDERS("Reminders"),
     CALENDAR("Calendar"),
     HOUSEHOLD("Mesh")
@@ -124,49 +134,19 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
         context = appContext,
         repository = repository,
         onIncomingReminders = { incoming ->
-            incoming.forEach { rem ->
-                val isNudge = ReminderTriggerType.fromString(rem.triggerType) == ReminderTriggerType.NUDGE
-                val title = when {
-                    isNudge && rem.isUrgent -> "URGENT • From ${rem.createdByName.ifBlank { "Parent" }}"
-                    isNudge -> "Live reminder from ${rem.createdByName.ifBlank { "Parent" }}"
-                    else -> rem.title
-                }
-                val body = if (isNudge) rem.title else rem.notes.ifBlank { "Synced from family mesh" }
-                ReminderNotificationHelper.postNotification(
-                    context = appContext,
-                    notificationId = rem.id.hashCode(),
-                    title = title,
-                    body = body,
-                    channelId = if (isNudge) {
-                        ReminderNotificationHelper.CHANNEL_NUDGES
-                    } else {
-                        ReminderNotificationHelper.CHANNEL_REMINDERS
-                    }
-                )
-                ReminderNotificationHelper.scheduleTimeReminder(appContext, rem)
-            }
+            ReminderNotificationHelper.notifyIncomingMeshItems(
+                context = appContext,
+                newReminders = incoming,
+                fulfilledShoppingItems = emptyList()
+            )
         },
         onFulfilledShoppingItems = { items ->
-            if (items.isNotEmpty()) {
-                val byChecker = items.groupBy { it.checkedByName.ifBlank { "Family" } }
-                byChecker.forEach { (checkerName, checkedItems) ->
-                    val names = checkedItems.joinToString(", ") { it.name }
-                    val notifTitle = if (checkedItems.size == 1) {
-                        "Shopping item picked up"
-                    } else {
-                        "${checkedItems.size} shopping items picked up"
-                    }
-                    val notifBody = "$checkerName checked off $names"
-                    ReminderNotificationHelper.postNotification(
-                        context = appContext,
-                        notificationId = ("shopping_got_${checkedItems.first().id}").hashCode(),
-                        title = notifTitle,
-                        body = notifBody,
-                        channelId = ReminderNotificationHelper.CHANNEL_REMINDERS
-                    )
-                    showMessage(notifBody)
-                }
-            }
+            ReminderNotificationHelper.notifyIncomingMeshItems(
+                context = appContext,
+                newReminders = emptyList(),
+                fulfilledShoppingItems = items,
+                onShoppingSummary = { showMessage(it) }
+            )
         },
         onHomeWifiPeerSeen = {
             viewModelScope.launch {
@@ -262,10 +242,12 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
 
     init {
         ReminderNotificationHelper.ensureChannels(appContext)
+        NightlyUpdateScheduler.scheduleNightlyCheck(appContext)
         viewModelScope.launch {
             val existing = repository.getConfig()
             if (existing != null) {
                 meshEngine.startMeshNode()
+                MeshBackgroundSyncJobService.schedulePeriodicSync(appContext)
                 rescheduleAllNotifications()
                 refreshLocationChecks()
                 checkForUpdates(silent = true)
@@ -281,9 +263,11 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun onAppResumed() {
+        NightlyUpdateScheduler.scheduleNightlyCheck(appContext)
         viewModelScope.launch {
             val cfg = repository.getConfig()
             if (cfg != null) {
+                MeshBackgroundSyncJobService.schedulePeriodicSync(appContext)
                 meshEngine.refreshLocalAddresses()
                 meshEngine.syncMeshNow(silent = true)
                 refreshLocationChecks()
@@ -324,6 +308,7 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
                 deviceType = deviceType
             )
             meshEngine.startMeshNode()
+            MeshBackgroundSyncJobService.schedulePeriodicSync(appContext)
             showMessage("Founded ${config.householdName}! Pairing code: ${config.pairingCode}")
         }
     }
@@ -340,19 +325,26 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
             showMessage("Enter your display name first.")
             return
         }
-        val uriParsed = MeshSyncEngine.parsePairingUri(rawAddress)
-        val host = uriParsed?.first ?: MeshSyncEngine.normalizeHost(rawAddress)
-        val port = uriParsed?.second ?: rawAddress.substringAfterLast(":", "8765").toIntOrNull() ?: 8765
+        val trimmedAddr = rawAddress.trim()
+        val isHttpUrl = trimmedAddr.startsWith("https://", ignoreCase = true) ||
+            trimmedAddr.startsWith("http://", ignoreCase = true)
+        val uriParsed = MeshSyncEngine.parsePairingUri(trimmedAddr)
+        val hostOrUrl = when {
+            isHttpUrl -> MeshSyncEngine.normalizeHubBaseUrl(trimmedAddr)
+            uriParsed != null -> uriParsed.first
+            else -> MeshSyncEngine.normalizeHost(trimmedAddr)
+        }
+        val port = uriParsed?.second ?: trimmedAddr.substringAfterLast(":", "8765").toIntOrNull() ?: 8765
         val code = (uriParsed?.third?.ifBlank { rawPairingCode } ?: rawPairingCode).trim().uppercase()
 
-        if (host.isBlank() || code.length < 4) {
-            showMessage("Enter a peer IP/address and the 6-character pairing code.")
+        if (hostOrUrl.isBlank() || code.length < 4) {
+            showMessage("Enter a peer IP/Hub URL and the 6-character pairing code.")
             return
         }
 
         viewModelScope.launch {
             transientState.update { it.copy(isJoiningMesh = true) }
-            val result = meshEngine.joinViaPeer(host, port, code)
+            val result = meshEngine.joinViaPeer(hostOrUrl, port, code)
             transientState.update { it.copy(isJoiningMesh = false) }
             result.fold(
                 onSuccess = { payload ->
@@ -367,12 +359,16 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
                         deviceType = deviceType,
                         initialPayload = payload
                     )
+                    if (isHttpUrl && payload.hubUrl.isBlank()) {
+                        repository.updateConfig { it.copy(hubUrl = hostOrUrl) }
+                    }
                     meshEngine.startMeshNode()
+                    MeshBackgroundSyncJobService.schedulePeriodicSync(appContext)
                     rescheduleAllNotifications()
                     showMessage("Joined ${payload.householdName} as ${role.label}!")
                 },
                 onFailure = { err ->
-                    showMessage(err.message ?: "Could not connect to peer at $host:$port")
+                    showMessage(err.message ?: "Could not connect to $hostOrUrl")
                 }
             )
         }
@@ -657,6 +653,41 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
         _pinnedCoordinates.value = null
     }
 
+    fun searchAddressCoordinates(query: String) {
+        val cleaned = query.trim()
+        if (cleaned.isBlank()) return
+        viewModelScope.launch {
+            val coords = withContext(Dispatchers.IO) {
+                try {
+                    if (!Geocoder.isPresent()) return@withContext null
+                    val geocoder = Geocoder(appContext, Locale.getDefault())
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        suspendCancellableCoroutine<Pair<Double, Double>?> { cont ->
+                            geocoder.getFromLocationName(cleaned, 1) { addresses ->
+                                val first = addresses.firstOrNull()
+                                if (cont.isActive) {
+                                    cont.resume(first?.let { it.latitude to it.longitude })
+                                }
+                            }
+                        }
+                    } else {
+                        @Suppress("DEPRECATION")
+                        val first = geocoder.getFromLocationName(cleaned, 1)?.firstOrNull()
+                        first?.let { it.latitude to it.longitude }
+                    }
+                } catch (_: Exception) {
+                    null
+                }
+            }
+            if (coords != null) {
+                _pinnedCoordinates.value = coords
+                showMessage("Found address location!")
+            } else {
+                showMessage("Couldn't find \"$cleaned\" — try adding city/state or use current GPS.")
+            }
+        }
+    }
+
     fun savePlace(place: SavedPlaceEntity) {
         if (place.name.isBlank()) return
         viewModelScope.launch {
@@ -877,6 +908,7 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
             )
             result.fold(
                 onSuccess = { found ->
+                    NightlyUpdateScheduler.recordCheckedNow(appContext)
                     transientState.update {
                         it.copy(
                             isCheckingUpdate = false,
@@ -911,6 +943,32 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun updateHubUrl(rawUrl: String) {
+        val normalized = MeshSyncEngine.normalizeHubBaseUrl(rawUrl)
+        viewModelScope.launch {
+            repository.updateConfig { it.copy(hubUrl = normalized) }
+            if (normalized.isBlank()) {
+                meshEngine.syncMeshNow(silent = true)
+                showMessage("Cleared optional Home Hub URL — using home Wi-Fi sync")
+            } else {
+                val health = meshEngine.probeHubHealth(normalized)
+                val synced = meshEngine.syncMeshNow(silent = false)
+                health.fold(
+                    onSuccess = { node ->
+                        showMessage("Connected to ${node.displayName} & shared with family mesh!")
+                    },
+                    onFailure = {
+                        if (synced > 0) {
+                            showMessage("Saved Home Hub URL & synced")
+                        } else {
+                            showMessage("Saved Home Hub URL (hub not reachable yet — will retry in background)")
+                        }
+                    }
+                )
+            }
+        }
+    }
+
     fun dismissUpdateBanner(versionName: String) {
         transientState.update { it.copy(updateBannerDismissedVersion = versionName) }
     }
@@ -918,6 +976,7 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
     fun leaveHousehold() {
         viewModelScope.launch {
             meshEngine.stopMeshNode()
+            MeshBackgroundSyncJobService.cancelPeriodicSync(appContext)
             repository.leaveHousehold()
             meshEngine.startDiscoveryForOnboarding()
             showMessage("Left household grouping")
