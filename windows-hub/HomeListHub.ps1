@@ -29,6 +29,24 @@ function Get-InstalledVersion {
 
 function Get-LocalLanIp {
     try {
+        $sock = New-Object System.Net.Sockets.Socket(
+            [System.Net.Sockets.AddressFamily]::InterNetwork,
+            [System.Net.Sockets.SocketType]::Dgram,
+            [System.Net.Sockets.ProtocolType]::Udp
+        )
+        try {
+            $sock.Connect("1.1.1.1", 53)
+            $ep = [System.Net.IPEndPoint]$sock.LocalEndPoint
+            if ($ep -and $ep.Address -and -not [System.Net.IPAddress]::IsLoopback($ep.Address)) {
+                $ipStr = $ep.Address.ToString()
+                if (-not $ipStr.StartsWith("169.254.")) { return $ipStr }
+            }
+        } finally {
+            $sock.Close()
+        }
+    } catch {}
+
+    try {
         $addrs = [System.Net.Dns]::GetHostAddresses([System.Net.Dns]::GetHostName()) |
             Where-Object {
                 $_.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork -and
@@ -36,8 +54,11 @@ function Get-LocalLanIp {
                 -not $_.ToString().StartsWith("169.254.")
             }
         foreach ($a in $addrs) {
+            if ($a.ToString().StartsWith("192.168.")) { return $a.ToString() }
+        }
+        foreach ($a in $addrs) {
             $s = $a.ToString()
-            if ($s.StartsWith("192.168.") -or $s.StartsWith("10.") -or $s -match "^172\.(1[6-9]|2[0-9]|3[0-1])\.") {
+            if ($s.StartsWith("10.") -or $s -match "^172\.(1[6-9]|2[0-9]|3[0-1])\.") {
                 return $s
             }
         }
