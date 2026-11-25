@@ -3,12 +3,16 @@ package com.example.ui
 import android.app.Application
 import android.content.Intent
 import android.location.Geocoder
+import android.net.Uri
 import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import java.nio.charset.StandardCharsets
 import java.util.Locale
 import kotlin.coroutines.resume
 import com.example.BuildConfig
@@ -36,6 +40,7 @@ import com.example.data.ReminderEntity
 import com.example.data.ReminderTriggerType
 import com.example.data.SavedPlaceEntity
 import com.example.mesh.DiscoveredMeshNode
+import com.example.mesh.HouseholdBackupSnapshot
 import com.example.mesh.MeshBackgroundSyncJobService
 import com.example.mesh.MeshRuntimeStatus
 import com.example.mesh.MeshSyncEngine
@@ -971,6 +976,61 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
 
     fun dismissUpdateBanner(versionName: String) {
         transientState.update { it.copy(updateBannerDismissedVersion = versionName) }
+    }
+
+    fun exportBackupToUri(uri: Uri) {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                try {
+                    val snapshot = repository.buildBackupSnapshot()
+                        ?: return@withContext Result.failure<String>(IllegalStateException("No family configured yet"))
+                    val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
+                    val json = moshi.adapter(HouseholdBackupSnapshot::class.java).toJson(snapshot)
+                    appContext.contentResolver.openOutputStream(uri)?.use { out ->
+                        out.write(json.toByteArray(StandardCharsets.UTF_8))
+                        out.flush()
+                    } ?: return@withContext Result.failure<String>(IllegalStateException("Could not open file for writing"))
+                    Result.success(snapshot.config.householdName)
+                } catch (e: Exception) {
+                    Result.failure(e)
+                }
+            }
+            result.fold(
+                onSuccess = { name -> showMessage("Saved backup for $name!") },
+                onFailure = { err -> showMessage("Backup failed: ${err.message ?: "could not write file"}") }
+            )
+        }
+    }
+
+    fun restoreBackupFromUri(uri: Uri) {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                try {
+                    val json = appContext.contentResolver.openInputStream(uri)?.use { input ->
+                        input.readBytes().toString(StandardCharsets.UTF_8)
+                    } ?: return@withContext Result.failure<String>(IllegalStateException("Could not read selected file"))
+                    val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
+                    val snapshot = moshi.adapter(HouseholdBackupSnapshot::class.java).fromJson(json)
+                        ?: return@withContext Result.failure<String>(IllegalStateException("File is not a valid HomeList backup"))
+                    val restored = repository.restoreBackupSnapshot(snapshot)
+                    Result.success(restored.householdName)
+                } catch (e: Exception) {
+                    Result.failure(e)
+                }
+            }
+            result.fold(
+                onSuccess = { name ->
+                    meshEngine.startMeshNode()
+                    MeshBackgroundSyncJobService.schedulePeriodicSync(appContext)
+                    rescheduleAllNotifications()
+                    refreshLocationChecks()
+                    showMessage("Restored $name from backup!")
+                },
+                onFailure = { err ->
+                    showMessage("Restore failed: ${err.message ?: "invalid backup file"}")
+                }
+            )
+        }
     }
 
     fun leaveHousehold() {

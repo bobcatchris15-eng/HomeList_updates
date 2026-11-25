@@ -126,6 +126,7 @@ enum class MealSlot(val label: String, val sortOrder: Int) {
     }
 }
 
+@JsonClass(generateAdapter = true)
 @Entity(tableName = "node_config")
 data class NodeConfigEntity(
     @PrimaryKey val singletonId: Int = 1,

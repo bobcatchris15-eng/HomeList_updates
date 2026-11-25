@@ -1,6 +1,7 @@
 package com.example.data
 
 import com.example.BuildConfig
+import com.example.mesh.HouseholdBackupSnapshot
 import com.example.mesh.MeshGossipPayload
 import com.example.mesh.NetworkAddressDetector
 import kotlinx.coroutines.flow.Flow
@@ -604,6 +605,45 @@ class HomeListRepository(private val dao: HomeListDao) {
             newReminders = newlyArrivedForSelf,
             fulfilledShoppingItems = newlyFulfilledShopping
         )
+    }
+
+    suspend fun buildBackupSnapshot(): HouseholdBackupSnapshot? {
+        val config = dao.getConfig() ?: return null
+        refreshSelfPeerAddresses()
+        return HouseholdBackupSnapshot(
+            backupVersion = 1,
+            exportedAt = System.currentTimeMillis(),
+            config = config,
+            peers = dao.getAllPeers(),
+            members = dao.getAllMembers(),
+            chores = dao.getAllChores(),
+            completions = dao.getAllCompletions(),
+            places = dao.getAllPlaces(),
+            reminders = dao.getAllReminders(),
+            events = dao.getAllEvents(),
+            dinnerOptions = dao.getAllDinnerOptions(),
+            groceryItems = dao.getAllGroceryItems()
+        )
+    }
+
+    suspend fun restoreBackupSnapshot(snapshot: HouseholdBackupSnapshot): NodeConfigEntity {
+        leaveHousehold()
+        val restoredConfig = snapshot.config.copy(
+            singletonId = 1,
+            lastSyncedAt = System.currentTimeMillis()
+        )
+        dao.upsertConfig(restoredConfig)
+        if (snapshot.peers.isNotEmpty()) dao.upsertPeers(snapshot.peers)
+        if (snapshot.members.isNotEmpty()) dao.upsertMembers(snapshot.members)
+        if (snapshot.chores.isNotEmpty()) dao.upsertChores(snapshot.chores)
+        if (snapshot.completions.isNotEmpty()) dao.upsertCompletions(snapshot.completions)
+        if (snapshot.places.isNotEmpty()) dao.upsertPlaces(snapshot.places)
+        if (snapshot.reminders.isNotEmpty()) dao.upsertReminders(snapshot.reminders)
+        if (snapshot.events.isNotEmpty()) dao.upsertEvents(snapshot.events)
+        if (snapshot.dinnerOptions.isNotEmpty()) dao.upsertDinnerOptions(snapshot.dinnerOptions)
+        if (snapshot.groceryItems.isNotEmpty()) dao.upsertGroceryItems(snapshot.groceryItems)
+        refreshSelfPeerAddresses()
+        return restoredConfig
     }
 
     suspend fun leaveHousehold() {

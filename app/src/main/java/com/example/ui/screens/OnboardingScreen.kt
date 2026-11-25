@@ -77,6 +77,7 @@ fun OnboardingScreen(
     isTablet: Boolean,
     onFoundHousehold: (householdName: String, displayName: String, colorKey: String, isTablet: Boolean) -> Unit,
     onJoinHousehold: (address: String, code: String, displayName: String, role: MemberRole, colorKey: String, isTablet: Boolean) -> Unit,
+    onRestoreBackup: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var mode by remember { mutableStateOf(OnboardingMode.WELCOME) }
@@ -118,7 +119,8 @@ fun OnboardingScreen(
                             userDismissedAutoJoin = true
                             mode = OnboardingMode.FOUND
                         },
-                        onJoinClick = { mode = OnboardingMode.JOIN }
+                        onJoinClick = { mode = OnboardingMode.JOIN },
+                        onRestoreBackup = onRestoreBackup
                     )
                 }
 
@@ -155,7 +157,8 @@ fun OnboardingScreen(
 private fun WelcomeHeroSection(
     discoveredCount: Int,
     onFoundClick: () -> Unit,
-    onJoinClick: () -> Unit
+    onJoinClick: () -> Unit,
+    onRestoreBackup: () -> Unit
 ) {
     Spacer(modifier = Modifier.height(6.dp))
     Image(
@@ -256,6 +259,15 @@ private fun WelcomeHeroSection(
             Icon(Icons.Filled.Groups, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
             Text(stringResource(R.string.join_grouping), style = MaterialTheme.typography.labelLarge)
+        }
+
+        TextButton(
+            onClick = onRestoreBackup,
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("onboarding_restore_backup_button")
+        ) {
+            Text("Restore from a saved family backup (.json)")
         }
     }
 }
@@ -501,8 +513,8 @@ private fun JoinGroupingSection(
                     if (parsed.third.isNotBlank()) pairingCode = parsed.third
                 }
             },
-            label = { Text("Peer Wi-Fi IP or pairing link") },
-            placeholder = { Text("e.g., 192.168.1.42:8765") },
+            label = { Text("Windows Hub IP, peer IP, or Hub URL") },
+            placeholder = { Text("e.g., 192.168.1.42:8765 or https://hub.yourhome.com") },
             singleLine = true,
             modifier = Modifier
                 .fillMaxWidth()

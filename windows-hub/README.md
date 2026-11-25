@@ -1,21 +1,25 @@
-# HomeList Windows Home Hub (Optional)
+# HomeList Windows Founding Hub
 
-Run this lightweight Home Hub on any always-on Windows 10/11 desktop so family phones stay synced in the background—both on home Wi-Fi and away from home.
+Run this lightweight Founding Hub on your Windows 10/11 desktop so it holds the household's always-on copy and keeps every family phone synced in the background (both on home Wi-Fi and optionally away from home).
 
 No Python, Node.js, Docker, or Administrator privileges required.
 
 ## Quick Start (2 Minutes)
 
 1. Double-click **`Start-HomeListHub.bat`**.
-2. When prompted on first run, enter your household's **6-character Pairing Code** (found in the HomeList phone app under the top-right **Mesh** icon).
+2. Enter your **Household Name** and press **Enter** to auto-generate your **6-character Pairing Code** (or type one you prefer).
    - If Windows Firewall asks, click **Allow access** on Private networks.
-3. *(Optional)* Double-click **`Install-AutoStart.bat`** if you want the Hub to start minimized automatically whenever Windows boots.
+3. On each family phone:
+   - Open HomeList -> **Join a Family**
+   - Enter the **Join Address** (e.g., `192.168.x.x:8765`) and **Pairing Code** printed in the Hub window.
+   - Choose **Parent** or **Child** and tap **Connect & Join Family**.
+4. *(Optional)* Double-click **`Install-AutoStart.bat`** so the Hub starts minimized automatically whenever Windows boots.
+
+Because this PC holds the persistent copy in `homelist-hub-data.json`, even if a phone is reset or reinstalled, re-joining with the pairing code immediately restores the whole family!
 
 ## Optional: Away-From-Home Sync (Zero Config for Kids)
 
-By default, phones sync with the Windows Hub automatically on home Wi-Fi (and you can open `http://localhost:8765` in your browser to see the live Wall Board).
-
-To also let phones sync over mobile data when away from home without renting any cloud database:
+To let phones sync over mobile data when away from home without renting any cloud database:
 
 1. Expose `http://localhost:8765` using your preferred method:
    - **Easiest (free HTTPS, no port forwarding):** Install [Cloudflare Tunnel (`cloudflared`)](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) and run:
@@ -24,9 +28,9 @@ To also let phones sync over mobile data when away from home without renting any
      ```
      (Or use a named Cloudflare Tunnel on your own domain for a permanent URL.)
    - **Or** forward port `8765` / use a home WireGuard VPN to your desktop IP.
-2. Paste that single URL **once** into **Mesh -> Background & Home Hub Sync** on one Parent phone (or into `homelist-hub-config.json` as `"hubUrl"`).
-3. Every other family phone automatically receives that URL on its next sync—kids never have to configure anything.
+2. Put that URL once into `"hubUrl"` in `homelist-hub-config.json` (or under **Mesh -> Background & Home Hub Sync** on a Parent phone).
+3. Every family phone automatically receives that URL on its next sync—kids never have to configure anything.
 
 ## Nightly Updates
 
-The Windows Hub checks the exact same GitHub Releases URL (`https://github.com/bobcatchris15-eng/HomeList_updates/releases/latest`) every night at ~2:15 AM and notifies you when a new version is published. Double-click **`Update-HomeListHub.bat`** (or press **`U`** in the Hub window) to update while keeping all saved family data and settings intact.
+The Windows Hub checks the exact same GitHub Releases URL (`https://github.com/bobcatchris15-eng/HomeList_updates/releases/latest`) every night at ~2:15 AM and notifies you when a new version is published. Double-click **`Update-HomeListHub.bat`** (or press **`U`** in the Hub window) to update while keeping `homelist-hub-config.json` and `homelist-hub-data.json` intact.

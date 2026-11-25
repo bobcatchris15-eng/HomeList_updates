@@ -162,45 +162,66 @@ function Check-HubUpdate([object]$Config, [switch]$ApplyIfAvailable) {
     }
 }
 
+function New-PairingCode {
+    $alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    $bytes = New-Object byte[] 6
+    $rng.GetBytes($bytes)
+    $rng.Dispose()
+    $chars = for ($i = 0; $i -lt 6; $i++) { $alphabet[$bytes[$i] % $alphabet.Length] }
+    return (-join $chars)
+}
+
 function Load-OrCreateConfig {
     if (Test-Path $ConfigPath) {
         $cfg = Get-Content -Path $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
         if (-not $cfg.updateReleaseUrl) { $cfg | Add-Member -NotePropertyName updateReleaseUrl -NotePropertyValue $DefaultReleaseUrl -Force }
         if ($null -eq $cfg.hubUrl) { $cfg | Add-Member -NotePropertyName hubUrl -NotePropertyValue "" -Force }
         if (-not $cfg.port) { $cfg | Add-Member -NotePropertyName port -NotePropertyValue 8765 -Force }
+        if ($null -eq $cfg.isFounder) { $cfg | Add-Member -NotePropertyName isFounder -NotePropertyValue $true -Force }
+        if ([string]::IsNullOrWhiteSpace($cfg.householdId) -and $cfg.isFounder) {
+            $cfg | Add-Member -NotePropertyName householdId -NotePropertyValue ([Guid]::NewGuid().ToString()) -Force
+        }
         return $cfg
     }
 
     Write-Host ""
     Write-Host "============================================================" -ForegroundColor Cyan
-    Write-Host "         HomeList Windows Home Hub — First-Time Setup" -ForegroundColor Cyan
+    Write-Host "     HomeList Windows Founding Hub — First-Time Setup" -ForegroundColor Cyan
     Write-Host "============================================================" -ForegroundColor Cyan
-    Write-Host "Minimal setup: just enter your family's 6-character pairing code." -ForegroundColor Gray
-    Write-Host "(Find it in HomeList on your phone -> top-right Mesh icon.)" -ForegroundColor Gray
+    Write-Host "This PC will act as your household's Founding Hub by default." -ForegroundColor Gray
+    Write-Host "Family phones simply join using the IP and pairing code below." -ForegroundColor Gray
     Write-Host ""
 
-    $code = ""
-    while ([string]::IsNullOrWhiteSpace($code) -or $code.Trim().Length -lt 4) {
-        $code = (Read-Host "1) Household Pairing Code (e.g. K7M4XP)").Trim().ToUpperInvariant()
+    $familyName = (Read-Host "1) Household name (Enter for 'Our Family')").Trim()
+    if ([string]::IsNullOrWhiteSpace($familyName)) { $familyName = "Our Family" }
+
+    $codeInput = (Read-Host "2) Pairing code (press Enter to auto-generate a new 6-char code)").Trim().ToUpperInvariant()
+    $isFounder = $true
+    if ([string]::IsNullOrWhiteSpace($codeInput)) {
+        $code = New-PairingCode
+        Write-Host "   Generated pairing code: $code" -ForegroundColor Green
+    } else {
+        $code = $codeInput
     }
 
-    $seedPeer = (Read-Host "2) Optional: Phone Wi-Fi IP to pull data now (or press Enter to wait)").Trim()
     $pubUrl = Normalize-HubUrl (Read-Host "3) Optional: Away-from-home URL (e.g. https://hub.yourhome.com, or Enter to skip)")
 
     $cfg = [PSCustomObject]@{
         nodeId           = [Guid]::NewGuid().ToString()
-        householdId      = ""
-        householdName    = "HomeList Family"
+        householdId      = [Guid]::NewGuid().ToString()
+        householdName    = $familyName
         pairingCode      = $code
         displayName      = "$env:COMPUTERNAME Home Hub"
+        isFounder        = $isFounder
         port             = 8765
-        seedPeerIp       = $seedPeer
+        seedPeerIp       = ""
         hubUrl           = $pubUrl
         updateReleaseUrl = $DefaultReleaseUrl
     }
     Write-Utf8NoBom $ConfigPath ($cfg | ConvertTo-Json -Depth 6)
     Write-Host ""
-    Write-Host "Saved settings to $ConfigPath" -ForegroundColor Green
+    Write-Host "Founded '$familyName' and saved settings to $ConfigPath" -ForegroundColor Green
     return $cfg
 }
 
@@ -248,13 +269,27 @@ function Update-SelfPeer([hashtable]$Store, [object]$Config) {
         displayName    = [string]$Config.displayName
         role           = "PARENT"
         deviceType     = "WINDOWS"
-        isFounder      = $false
+        isFounder      = [bool]$Config.isFounder
         lanIp          = $lanIp
         port           = [int]$Config.port
         appVersionCode = 1
         appVersionName = $ver
         lastSeenAt     = $now
         updatedAt      = $now
+    }
+    # Seed a starter "Home" place when founding a new household so location reminders work right away
+    if ($Store.places.Count -eq 0 -and [bool]$Config.isFounder) {
+        $homeId = [Guid]::NewGuid().ToString()
+        $Store.places[$homeId] = [PSCustomObject]@{
+            id           = $homeId
+            name         = "Home"
+            latitude     = 0.0
+            longitude    = 0.0
+            radiusMeters = 200
+            isHomePlace  = $true
+            isDeleted    = $false
+            updatedAt    = $now
+        }
     }
 }
 
@@ -604,7 +639,7 @@ function Handle-HttpClient([System.Net.Sockets.TcpClient]$Client, [hashtable]$St
                 householdName  = [string]$Config.householdName
                 displayName    = [string]$Config.displayName
                 deviceType     = "WINDOWS"
-                isFounder      = $false
+                isFounder      = [bool]$Config.isFounder
                 port           = [int]$Config.port
                 appVersionCode = 1
                 appVersionName = Get-InstalledVersion
@@ -681,19 +716,23 @@ $LanIp = Get-LocalLanIp
 $Port = [int]$Config.port
 $InstalledVer = Get-InstalledVersion
 
+$JoinLink = "homelist://${LanIp}:${Port}?code=$($Config.pairingCode)"
+
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Green
-Write-Host "  HomeList Windows Home Hub v$InstalledVer" -ForegroundColor Green
+Write-Host "  HomeList Windows Founding Hub v$InstalledVer" -ForegroundColor Green
 Write-Host "============================================================" -ForegroundColor Green
 Write-Host "  Household     : $($Config.householdName)"
-Write-Host "  Pairing Code  : $($Config.pairingCode)"
-Write-Host "  Local Hub URL : http://${LanIp}:${Port}"
+Write-Host "  Pairing Code  : $($Config.pairingCode)" -ForegroundColor Yellow
+Write-Host "  Join Address  : ${LanIp}:${Port}" -ForegroundColor Cyan
+Write-Host "  Join Link     : $JoinLink" -ForegroundColor Cyan
 if (-not [string]::IsNullOrWhiteSpace($Config.hubUrl)) {
     Write-Host "  Away Hub URL  : $($Config.hubUrl) (auto-shared to family phones)" -ForegroundColor Cyan
 }
 Write-Host "  Wall Board    : http://localhost:${Port}"
 Write-Host "  Updates URL   : $($Config.updateReleaseUrl) (auto-checks nightly)"
 Write-Host ""
+Write-Host "  On each phone: Join a Family -> enter ${LanIp}:${Port} + code $($Config.pairingCode)" -ForegroundColor Gray
 Write-Host "  Keys: [S] Sync LAN peers now  |  [U] Check/Install Update  |  [Ctrl+C] Stop" -ForegroundColor Gray
 Write-Host "============================================================" -ForegroundColor Green
 Write-Host ""

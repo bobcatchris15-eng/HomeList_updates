@@ -169,6 +169,22 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
         }
     }
 
+    val exportBackupLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) {
+            viewModel.exportBackupToUri(uri)
+        }
+    }
+
+    val restoreBackupLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.restoreBackupFromUri(uri)
+        }
+    }
+
     LaunchedEffect(state.snackbarMessage) {
         val msg = state.snackbarMessage
         if (!msg.isNullOrBlank()) {
@@ -216,6 +232,9 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
                             },
                             onJoinHousehold = { addr, code, displayName, role, colorKey, tablet ->
                                 viewModel.joinHouseholdViaAddress(addr, code, displayName, role, colorKey, tablet)
+                            },
+                            onRestoreBackup = {
+                                restoreBackupLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
                             }
                         )
                     }
@@ -603,6 +622,14 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
                                             onCheckForUpdates = { viewModel.checkForUpdates(silent = false) },
                                             onUpdateReleaseUrl = { viewModel.updateReleaseUrl(it) },
                                             onUpdateHubUrl = { viewModel.updateHubUrl(it) },
+                                            onExportBackup = {
+                                                val safeName = (state.config?.householdName ?: "HomeList")
+                                                    .replace(Regex("[^A-Za-z0-9_-]"), "-")
+                                                exportBackupLauncher.launch("HomeList-$safeName-Backup.json")
+                                            },
+                                            onRestoreBackup = {
+                                                restoreBackupLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                                            },
                                             onToggleDarkTheme = { viewModel.toggleDarkTheme() },
                                             onLeaveHousehold = {
                                                 currentTab = AppTab.TODAY

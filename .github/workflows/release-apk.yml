@@ -61,14 +61,16 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "name=${VER_NAME}" >> "$GITHUB_OUTPUT"
 
-          # Bump versionName and versionCode in app/build.gradle.kts for this build
+          # Bump versionName and a globally monotonic versionCode (never resets across repos)
           sed -i -E "s/versionName = \"[^\"]+\"/versionName = \"${VER_NAME}\"/" app/build.gradle.kts
           if [ -n "${{ github.event.inputs.version_code }}" ]; then
-            sed -i -E "s/versionCode = [0-9]+/versionCode = ${{ github.event.inputs.version_code }}/" app/build.gradle.kts
+            FINAL_CODE="${{ github.event.inputs.version_code }}"
           else
-            AUTO_CODE=$(( GITHUB_RUN_NUMBER + 1 ))
-            sed -i -E "s/versionCode = [0-9]+/versionCode = ${AUTO_CODE}/" app/build.gradle.kts
+            # Monotonic 10-second counter since Nov 2023 (~9.5M+, safe for 600+ years, never resets on repo move)
+            FINAL_CODE=$(( ( $(date -u +%s) - 1700000000 ) / 10 ))
           fi
+          sed -i -E "s/versionCode = [0-9]+/versionCode = ${FINAL_CODE}/" app/build.gradle.kts
+          echo "code=${FINAL_CODE}" >> "$GITHUB_OUTPUT"
 
           # Upgrade KSP 2.3.5 -> 2.3.14 on GitHub Actions to fix google/ksp#2763
           # (headless CI NullPointerException in ApplicationManager.getApplication())
@@ -96,28 +98,21 @@ jobs:
           if [ -n "$KEYSTORE_BASE64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_PASSWORD" ]; then
             printf '%s' "$KEYSTORE_BASE64" | tr -d '\r\n ' | base64 --decode > my-upload-key.jks
             export KEYSTORE_PATH="$PWD/my-upload-key.jks"
+            CERT_SHA256=$(keytool -list -v -keystore my-upload-key.jks -storepass "$STORE_PASSWORD" -alias upload | grep -m1 'SHA256:' | awk '{print $2}')
             gradle :app:assembleRelease "${GRADLE_CI_FLAGS[@]}"
             APK_SRC="app/build/outputs/apk/release/app-release.apk"
             echo "signed_mode=release" >> "$GITHUB_OUTPUT"
-          else
-            # Fallback signing for initial testing before release keystore secrets are configured
-            if [ -f debug.keystore.base64 ] && [ ! -f debug.keystore ]; then
-              tr -d '\r\n ' < debug.keystore.base64 | base64 --decode > debug.keystore
-            elif [ ! -f debug.keystore ]; then
-              keytool -genkeypair -v \
-                -keystore debug.keystore \
-                -storepass android \
-                -alias androiddebugkey \
-                -keypass android \
-                -keyalg RSA \
-                -keysize 2048 \
-                -validity 10000 \
-                -dname "CN=Android Debug,O=Android,C=US"
-            fi
+          elif [ -f debug.keystore.base64 ]; then
+            tr -d '\r\n ' < debug.keystore.base64 | base64 --decode > debug.keystore
+            CERT_SHA256=$(keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey | grep -m1 'SHA256:' | awk '{print $2}')
             gradle :app:assembleDebug "${GRADLE_CI_FLAGS[@]}"
             APK_SRC="app/build/outputs/apk/debug/app-debug.apk"
-            echo "signed_mode=debug" >> "$GITHUB_OUTPUT"
+            echo "signed_mode=debug-consistent" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::No persistent signing keystore found! Commit debug.keystore.base64 OR configure KEYSTORE_BASE64 / STORE_PASSWORD / KEY_PASSWORD secrets. Refusing to generate a random key that breaks in-place Android updates."
+            exit 1
           fi
+          echo "cert_sha256=${CERT_SHA256:-unknown}" >> "$GITHUB_OUTPUT"
 
           OUT_APK="HomeList-${{ steps.version.outputs.tag }}.apk"
           cp "$APK_SRC" "$OUT_APK"
@@ -140,7 +135,8 @@ jobs:
             ${{ steps.build.outputs.apk_path }}
             ${{ steps.build.outputs.hub_zip_path }}
           body: |
-            HomeList release (`${{ steps.build.outputs.signed_mode }}` signed Android APK + optional Windows Home Hub).
+            HomeList release (`${{ steps.build.outputs.signed_mode }}` signed, `versionCode: ${{ steps.version.outputs.code }}`).
 
-            - **Android phones**: Tap the `.apk` asset below to install. Phones auto-check this repository nightly.
+            - **Android phones**: Tap the `.apk` asset below to update in place (no uninstall needed once installed with this signing key). Phones auto-check this repository nightly.
+            - **Signing SHA-256**: `${{ steps.build.outputs.cert_sha256 }}`
             - **Windows Home Hub (optional)**: Download the `.zip` asset below (or run `Update-HomeListHub.bat`). The Windows Hub also checks this same release URL nightly.

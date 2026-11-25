@@ -75,6 +75,8 @@ fun HouseholdMeshScreen(
     onCheckForUpdates: () -> Unit,
     onUpdateReleaseUrl: (String) -> Unit,
     onUpdateHubUrl: (String) -> Unit,
+    onExportBackup: () -> Unit,
+    onRestoreBackup: () -> Unit,
     onToggleDarkTheme: () -> Unit,
     onLeaveHousehold: () -> Unit,
     onShowMessage: (String) -> Unit,
@@ -644,6 +646,37 @@ fun HouseholdMeshScreen(
                             onCheckedChange = { onToggleDarkTheme() },
                             modifier = Modifier.testTag("dark_theme_switch")
                         )
+                    }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Family Backup & Restore", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            text = "Save a local backup file so you can restore your household anytime if you reinstall or switch phones.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = onExportBackup,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("export_backup_button")
+                            ) {
+                                Text("Save Backup")
+                            }
+                            OutlinedButton(
+                                onClick = onRestoreBackup,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("restore_backup_button")
+                            ) {
+                                Text("Restore File")
+                            }
+                        }
                     }
 
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)

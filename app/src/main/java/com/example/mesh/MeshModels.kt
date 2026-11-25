@@ -7,6 +7,7 @@ import com.example.data.DinnerOptionEntity
 import com.example.data.GroceryItemEntity
 import com.example.data.MemberEntity
 import com.example.data.MeshPeerEntity
+import com.example.data.NodeConfigEntity
 import com.example.data.ReminderEntity
 import com.example.data.SavedPlaceEntity
 import com.squareup.moshi.JsonClass
@@ -29,6 +30,22 @@ data class MeshGossipPayload(
     val groceryItems: List<GroceryItemEntity> = emptyList(),
     val updateReleaseUrl: String = "",
     val hubUrl: String = ""
+)
+
+@JsonClass(generateAdapter = true)
+data class HouseholdBackupSnapshot(
+    val backupVersion: Int = 1,
+    val exportedAt: Long,
+    val config: NodeConfigEntity,
+    val peers: List<MeshPeerEntity> = emptyList(),
+    val members: List<MemberEntity> = emptyList(),
+    val chores: List<ChoreEntity> = emptyList(),
+    val completions: List<CompletionEntity> = emptyList(),
+    val places: List<SavedPlaceEntity> = emptyList(),
+    val reminders: List<ReminderEntity> = emptyList(),
+    val events: List<CalendarEventEntity> = emptyList(),
+    val dinnerOptions: List<DinnerOptionEntity> = emptyList(),
+    val groceryItems: List<GroceryItemEntity> = emptyList()
 )
 
 @JsonClass(generateAdapter = true)
