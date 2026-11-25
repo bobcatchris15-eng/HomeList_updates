@@ -98,19 +98,44 @@ jobs:
           if [ -n "$KEYSTORE_BASE64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_PASSWORD" ]; then
             printf '%s' "$KEYSTORE_BASE64" | tr -d '\r\n ' | base64 --decode > my-upload-key.jks
             export KEYSTORE_PATH="$PWD/my-upload-key.jks"
-            CERT_SHA256=$(keytool -list -v -keystore my-upload-key.jks -storepass "$STORE_PASSWORD" -alias upload | grep -m1 'SHA256:' | awk '{print $2}')
+            CERT_SHA256=$(keytool -list -v -keystore my-upload-key.jks -storepass "$STORE_PASSWORD" -alias upload | grep -m1 'SHA256:' | awk '{print $2}' || true)
             gradle :app:assembleRelease "${GRADLE_CI_FLAGS[@]}"
             APK_SRC="app/build/outputs/apk/release/app-release.apk"
             echo "signed_mode=release" >> "$GITHUB_OUTPUT"
-          elif [ -f debug.keystore.base64 ]; then
-            tr -d '\r\n ' < debug.keystore.base64 | base64 --decode > debug.keystore
-            CERT_SHA256=$(keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey | grep -m1 'SHA256:' | awk '{print $2}')
+          else
+            if [ -f debug.keystore.base64 ]; then
+              echo "Using committed debug.keystore.base64"
+              tr -d '\r\n ' < debug.keystore.base64 | base64 --decode > debug.keystore
+            elif git ls-remote --exit-code --heads origin ci-keystore >/dev/null 2>&1; then
+              echo "Restoring persistent signing keystore from origin/ci-keystore branch"
+              git fetch --depth=1 origin ci-keystore:refs/remotes/origin/ci-keystore
+              git show refs/remotes/origin/ci-keystore:debug.keystore.base64 | tr -d '\r\n ' | base64 --decode > debug.keystore
+            else
+              echo "First-time setup: generating one persistent signing keystore and saving to orphan branch ci-keystore"
+              keytool -genkeypair -v \
+                -keystore debug.keystore \
+                -storepass android \
+                -alias androiddebugkey \
+                -keypass android \
+                -keyalg RSA \
+                -keysize 2048 \
+                -validity 10000 \
+                -dname "CN=HomeList CI,O=HomeList,C=US"
+              base64 -w 0 debug.keystore > /tmp/ci-debug.keystore.base64
+              BLOB_SHA=$(git hash-object -w /tmp/ci-debug.keystore.base64)
+              TREE_SHA=$(printf '100644 blob %s\tdebug.keystore.base64\n' "$BLOB_SHA" | git mktree)
+              COMMIT_SHA=$(GIT_AUTHOR_NAME="github-actions[bot]" \
+                GIT_AUTHOR_EMAIL="github-actions[bot]@users.noreply.github.com" \
+                GIT_COMMITTER_NAME="github-actions[bot]" \
+                GIT_COMMITTER_EMAIL="github-actions[bot]@users.noreply.github.com" \
+                git commit-tree "$TREE_SHA" -m "Persist consistent CI signing keystore for in-place APK updates")
+              git push origin "$COMMIT_SHA:refs/heads/ci-keystore"
+              rm -f /tmp/ci-debug.keystore.base64
+            fi
+            CERT_SHA256=$(keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey | grep -m1 'SHA256:' | awk '{print $2}' || true)
             gradle :app:assembleDebug "${GRADLE_CI_FLAGS[@]}"
             APK_SRC="app/build/outputs/apk/debug/app-debug.apk"
             echo "signed_mode=debug-consistent" >> "$GITHUB_OUTPUT"
-          else
-            echo "::error::No persistent signing keystore found! Commit debug.keystore.base64 OR configure KEYSTORE_BASE64 / STORE_PASSWORD / KEY_PASSWORD secrets. Refusing to generate a random key that breaks in-place Android updates."
-            exit 1
           fi
           echo "cert_sha256=${CERT_SHA256:-unknown}" >> "$GITHUB_OUTPUT"
 
