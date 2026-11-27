@@ -60,8 +60,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.MemberRole
-import com.example.mesh.DiscoveredMeshNode
-import com.example.mesh.MeshSyncEngine
+import com.example.mesh.HouseholdInvite
 import com.example.ui.theme.MemberPaletteMap
 
 private enum class OnboardingMode {
@@ -72,27 +71,20 @@ private enum class OnboardingMode {
 
 @Composable
 fun OnboardingScreen(
-    discoveredNodes: List<DiscoveredMeshNode>,
+    inviteLink: String?,
     isJoining: Boolean,
     isTablet: Boolean,
     onFoundHousehold: (householdName: String, displayName: String, colorKey: String, isTablet: Boolean) -> Unit,
-    onJoinHousehold: (address: String, code: String, displayName: String, role: MemberRole, colorKey: String, isTablet: Boolean) -> Unit,
+    onJoinHousehold: (link: String, displayName: String, role: MemberRole, colorKey: String, isTablet: Boolean) -> Unit,
     onRestoreBackup: () -> Unit,
+    onClose: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    var mode by remember { mutableStateOf(OnboardingMode.WELCOME) }
-    var userDismissedAutoJoin by remember { mutableStateOf(false) }
-
-    // Automatically assume Join mode if an existing HomeList node is spotted on home Wi-Fi
-    LaunchedEffect(discoveredNodes, mode, userDismissedAutoJoin) {
-        if (mode == OnboardingMode.WELCOME && !userDismissedAutoJoin && discoveredNodes.isNotEmpty()) {
-            mode = OnboardingMode.JOIN
-        }
+    var mode by remember(inviteLink) {
+        mutableStateOf(if (inviteLink == null) OnboardingMode.WELCOME else OnboardingMode.JOIN)
     }
-
-    BackHandler(enabled = mode != OnboardingMode.WELCOME) {
-        if (mode == OnboardingMode.JOIN) userDismissedAutoJoin = true
-        mode = OnboardingMode.WELCOME
+    BackHandler(enabled = mode != OnboardingMode.WELCOME || onClose != null) {
+        if (mode != OnboardingMode.WELCOME) mode = OnboardingMode.WELCOME else onClose?.invoke()
     }
 
     Box(
@@ -111,12 +103,13 @@ fun OnboardingScreen(
                 .padding(horizontal = 20.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            if (onClose != null) {
+                TextButton(onClick = onClose, enabled = !isJoining) { Text("Back to household") }
+            }
             when (mode) {
                 OnboardingMode.WELCOME -> {
                     WelcomeHeroSection(
-                        discoveredCount = discoveredNodes.size,
                         onFoundClick = {
-                            userDismissedAutoJoin = true
                             mode = OnboardingMode.FOUND
                         },
                         onJoinClick = { mode = OnboardingMode.JOIN },
@@ -134,15 +127,13 @@ fun OnboardingScreen(
 
                 OnboardingMode.JOIN -> {
                     JoinGroupingSection(
-                        discoveredNodes = discoveredNodes,
+                        inviteLink = inviteLink,
                         isJoining = isJoining,
                         isTablet = isTablet,
                         onBack = {
-                            userDismissedAutoJoin = true
                             mode = OnboardingMode.WELCOME
                         },
                         onSwitchToFound = {
-                            userDismissedAutoJoin = true
                             mode = OnboardingMode.FOUND
                         },
                         onSubmit = onJoinHousehold
@@ -155,7 +146,6 @@ fun OnboardingScreen(
 
 @Composable
 private fun WelcomeHeroSection(
-    discoveredCount: Int,
     onFoundClick: () -> Unit,
     onJoinClick: () -> Unit,
     onRestoreBackup: () -> Unit
@@ -194,8 +184,8 @@ private fun WelcomeHeroSection(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             FeatureBullet(
-                title = "Pure phone-to-phone Wi-Fi mesh",
-                body = "No cloud accounts or PC required. Phones automatically discover each other and sync over home Wi-Fi."
+                title = "Encrypted sync between household devices",
+                body = "Share an invite link to pair devices. HomeList syncs on Wi-Fi and mobile data."
             )
             FeatureBullet(
                 title = "Parent & Child sides",
@@ -208,67 +198,39 @@ private fun WelcomeHeroSection(
         }
     }
 
-    if (discoveredCount > 0) {
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.secondaryContainer
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Wifi,
-                    contentDescription = "Wi-Fi peer found",
-                    tint = MaterialTheme.colorScheme.onSecondaryContainer
-                )
-                Text(
-                    text = "$discoveredCount HomeList phone${if (discoveredCount == 1) "" else "s"} found on this Wi-Fi!",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer
-                )
-            }
-        }
+    Button(
+        onClick = onFoundClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(54.dp)
+            .testTag("found_family_button"),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Icon(Icons.Filled.Home, contentDescription = null)
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(stringResource(R.string.found_grouping), style = MaterialTheme.typography.labelLarge)
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Button(
-            onClick = onFoundClick,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(54.dp)
-                .testTag("found_family_button"),
-            shape = RoundedCornerShape(16.dp)
-        ) {
-            Icon(Icons.Filled.Home, contentDescription = null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(stringResource(R.string.found_grouping), style = MaterialTheme.typography.labelLarge)
-        }
+    OutlinedButton(
+        onClick = onJoinClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(54.dp)
+            .testTag("join_family_button"),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Icon(Icons.Filled.Groups, contentDescription = null)
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(stringResource(R.string.join_grouping), style = MaterialTheme.typography.labelLarge)
+    }
 
-        OutlinedButton(
-            onClick = onJoinClick,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(54.dp)
-                .testTag("join_family_button"),
-            shape = RoundedCornerShape(16.dp)
-        ) {
-            Icon(Icons.Filled.Groups, contentDescription = null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(stringResource(R.string.join_grouping), style = MaterialTheme.typography.labelLarge)
-        }
-
-        TextButton(
-            onClick = onRestoreBackup,
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("onboarding_restore_backup_button")
-        ) {
-            Text("Restore from a saved family backup (.json)")
-        }
+    TextButton(
+        onClick = onRestoreBackup,
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("onboarding_restore_backup_button")
+    ) {
+        Text("Restore from a saved family backup (.json)")
     }
 }
 
@@ -350,233 +312,48 @@ private fun FoundGroupingSection(
 
 @Composable
 private fun JoinGroupingSection(
-    discoveredNodes: List<DiscoveredMeshNode>,
+    inviteLink: String?,
     isJoining: Boolean,
     isTablet: Boolean,
     onBack: () -> Unit,
     onSwitchToFound: () -> Unit,
-    onSubmit: (String, String, String, MemberRole, String, Boolean) -> Unit
+    onSubmit: (String, String, MemberRole, String, Boolean) -> Unit
 ) {
-    var peerAddress by remember { mutableStateOf("") }
-    var pairingCode by remember { mutableStateOf("") }
+    var link by remember(inviteLink) { mutableStateOf(inviteLink.orEmpty()) }
     var displayName by remember { mutableStateOf("") }
     var role by remember { mutableStateOf(MemberRole.CHILD) }
-    var selectedColor by remember { mutableStateOf("sage") }
-    var showManualAddress by remember { mutableStateOf(false) }
-
-    // Pre-select the best discovered HomeList node on Wi-Fi automatically
-    val bestNode = remember(discoveredNodes) {
-        discoveredNodes.firstOrNull { it.isFounder } ?: discoveredNodes.firstOrNull()
-    }
-    LaunchedEffect(bestNode) {
-        if (peerAddress.isBlank() && bestNode != null) {
-            peerAddress = "${bestNode.host}:${bestNode.port}"
-        }
-    }
-
-    val matchedNode = discoveredNodes.firstOrNull { "${it.host}:${it.port}" == peerAddress }
-
+    var colorKey by remember { mutableStateOf("terracotta") }
+    val invite = remember(link) { HouseholdInvite.parse(link) }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = onBack, modifier = Modifier.testTag("onboarding_back_button")) {
+        IconButton(onClick = onBack, enabled = !isJoining) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
         }
-        Text(
-            text = matchedNode?.householdName?.takeIf { it.isNotBlank() }?.let { "Join $it" }
-                ?: "Join a Family",
-            style = MaterialTheme.typography.headlineMedium
-        )
+        Text("Join a household", style = MaterialTheme.typography.headlineSmall)
     }
-
-    if (discoveredNodes.isNotEmpty()) {
-        Surface(
-            shape = RoundedCornerShape(18.dp),
-            color = MaterialTheme.colorScheme.secondaryContainer,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.45f)),
-            modifier = Modifier.testTag("auto_discovered_wifi_banner")
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Wifi,
-                    contentDescription = "Found family on Wi-Fi",
-                    tint = MaterialTheme.colorScheme.onSecondaryContainer
-                )
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Found ${matchedNode?.householdName?.ifBlank { "a HomeList family" } ?: "HomeList"} on Wi-Fi!",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer
-                    )
-                    Text(
-                        text = "Enter the 6-character pairing code from a family member's phone to join.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.85f)
-                    )
-                }
-            }
-        }
-
-        if (discoveredNodes.size > 1) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                discoveredNodes.forEach { node ->
-                    val isSelected = peerAddress == "${node.host}:${node.port}"
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
-                            .clickable {
-                                peerAddress = "${node.host}:${node.port}"
-                                showManualAddress = false
-                            },
-                        shape = RoundedCornerShape(16.dp),
-                        color = if (isSelected) MaterialTheme.colorScheme.secondaryContainer
-                        else MaterialTheme.colorScheme.surface,
-                        border = BorderStroke(
-                            1.dp,
-                            if (isSelected) MaterialTheme.colorScheme.secondary
-                            else MaterialTheme.colorScheme.outlineVariant
-                        )
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(14.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = node.householdName.ifBlank { node.displayName },
-                                    style = MaterialTheme.typography.titleSmall
-                                )
-                                Text(
-                                    text = "${node.displayName} • ${node.host}:${node.port}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            if (isSelected) {
-                                Icon(
-                                    imageVector = Icons.Filled.Check,
-                                    contentDescription = "Selected peer",
-                                    tint = MaterialTheme.colorScheme.secondary
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     OutlinedTextField(
-        value = pairingCode,
-        onValueChange = { input ->
-            val parsed = MeshSyncEngine.parsePairingUri(input)
-            if (parsed != null) {
-                peerAddress = "${parsed.first}:${parsed.second}"
-                if (parsed.third.isNotBlank()) pairingCode = parsed.third.uppercase().take(8)
-            } else {
-                pairingCode = input.uppercase().take(8)
-            }
-        },
-        label = { Text("6-character pairing code") },
-        placeholder = { Text("e.g., HL48K2") },
-        singleLine = true,
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("join_code_input")
+        value = link, onValueChange = { link = it }, singleLine = true, enabled = !isJoining,
+        label = { Text("HomeList invite link") }, modifier = Modifier.fillMaxWidth().testTag("join_peer_address")
     )
-
+    invite?.householdName?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.titleMedium) }
     OutlinedTextField(
-        value = displayName,
-        onValueChange = { displayName = it },
-        label = { Text("Your name") },
-        placeholder = { Text("e.g., Maya, Leo, Dad") },
-        singleLine = true,
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("join_name_input")
+        value = displayName, onValueChange = { displayName = it }, singleLine = true, enabled = !isJoining,
+        label = { Text("Your display name") }, modifier = Modifier.fillMaxWidth().testTag("join_display_name")
     )
-
-    if (discoveredNodes.isEmpty() || showManualAddress) {
-        OutlinedTextField(
-            value = peerAddress,
-            onValueChange = { input ->
-                peerAddress = input
-                val parsed = MeshSyncEngine.parsePairingUri(input)
-                if (parsed != null) {
-                    peerAddress = "${parsed.first}:${parsed.second}"
-                    if (parsed.third.isNotBlank()) pairingCode = parsed.third
-                }
-            },
-            label = { Text("Windows Hub IP, peer IP, or Hub URL") },
-            placeholder = { Text("e.g., 192.168.1.42:8765 or https://hub.yourhome.com") },
-            singleLine = true,
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("join_address_input")
-        )
-    } else {
-        TextButton(
-            onClick = { showManualAddress = true },
-            modifier = Modifier.testTag("toggle_manual_address_button")
-        ) {
-            Text("Connecting to ${matchedNode?.displayName ?: peerAddress} • Enter IP manually instead")
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        MemberRole.entries.forEach { option ->
+            FilterChip(selected = role == option, onClick = { role = option }, label = { Text(option.label) })
         }
     }
-
-    Text("Your role on this phone", style = MaterialTheme.typography.titleSmall)
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        FilterChip(
-            selected = role == MemberRole.CHILD,
-            onClick = { role = MemberRole.CHILD },
-            label = { Text("Child") },
-            modifier = Modifier.testTag("role_chip_child")
-        )
-        FilterChip(
-            selected = role == MemberRole.PARENT,
-            onClick = { role = MemberRole.PARENT },
-            label = { Text("Parent") },
-            modifier = Modifier.testTag("role_chip_parent")
-        )
-    }
-
-    ColorPickerRow(selectedKey = selectedColor, onSelect = { selectedColor = it })
-
+    ColorPickerRow(selectedKey = colorKey, onSelect = { colorKey = it })
     Button(
-        onClick = { onSubmit(peerAddress, pairingCode, displayName, role, selectedColor, isTablet) },
-        enabled = !isJoining && peerAddress.isNotBlank() && pairingCode.length >= 4 && displayName.isNotBlank(),
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(54.dp)
-            .testTag("join_family_submit_button"),
-        shape = RoundedCornerShape(16.dp)
+        onClick = { onSubmit(link, displayName, role, colorKey, isTablet) },
+        enabled = !isJoining && invite != null && displayName.isNotBlank(),
+        modifier = Modifier.fillMaxWidth().testTag("join_household_button")
     ) {
-        if (isJoining) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(20.dp),
-                strokeWidth = 2.dp,
-                color = MaterialTheme.colorScheme.onPrimary
-            )
-            Spacer(modifier = Modifier.width(10.dp))
-            Text("Connecting to Mesh...")
-        } else {
-            Text("Connect & Join Family", style = MaterialTheme.typography.labelLarge)
-        }
+        if (isJoining) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+        else Text("Join Household")
     }
-
-    TextButton(
-        onClick = onSwitchToFound,
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("switch_to_found_family_button")
-    ) {
-        Text("Start a brand-new family instead")
-    }
+    TextButton(onClick = onSwitchToFound, enabled = !isJoining) { Text("Create a household instead") }
 }
 
 @Composable

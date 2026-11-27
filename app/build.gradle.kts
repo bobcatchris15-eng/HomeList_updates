@@ -14,10 +14,13 @@ android {
 
   defaultConfig {
     applicationId = "com.aistudio.homelist.krmvqz"
-    minSdk = 24
+    // The lineage-signed update uses APK Signature Scheme v3.
+    minSdk = if (providers.gradleProperty("homeListRotatedRelease").orNull == "true") 28 else 24
     targetSdk = 36
     versionCode = 1
     versionName = "1.0"
+
+    ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -58,6 +61,13 @@ android {
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_11
     targetCompatibility = JavaVersion.VERSION_11
+  }
+  packaging {
+    resources.excludes += setOf(
+      "darwin-aarch64/libiroh_ffi.dylib",
+      "linux-*/libiroh_ffi.so",
+      "win32-x86-64/iroh_ffi.dll"
+    )
   }
   buildFeatures {
     compose = true
@@ -124,6 +134,10 @@ dependencies {
   // implementation(libs.logging.interceptor)
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
+  implementation(libs.iroh) { exclude(group = "net.java.dev.jna", module = "jna") }
+  implementation(variantOf(libs.jna) { artifactType("aar") })
+  implementation(libs.androidx.lifecycle.process)
+  implementation(libs.zxing)
   implementation(libs.play.services.location)
   // implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)

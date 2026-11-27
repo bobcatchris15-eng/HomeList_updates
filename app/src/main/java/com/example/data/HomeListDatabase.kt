@@ -10,6 +10,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 @Database(
     entities = [
         NodeConfigEntity::class,
+        HouseholdEntity::class,
         MeshPeerEntity::class,
         MemberEntity::class,
         ChoreEntity::class,
@@ -20,7 +21,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         DinnerOptionEntity::class,
         GroceryItemEntity::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 abstract class HomeListDatabase : RoomDatabase() {
@@ -155,13 +156,79 @@ abstract class HomeListDatabase : RoomDatabase() {
             }
         }
 
+        internal val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE households (
+                        householdId TEXT NOT NULL PRIMARY KEY, householdName TEXT NOT NULL,
+                        pairingCode TEXT NOT NULL, selfMemberId TEXT NOT NULL, selfRole TEXT NOT NULL,
+                        isFounder INTEGER NOT NULL, hubEndpointId TEXT NOT NULL, hubUrl TEXT NOT NULL,
+                        googleCalendarId INTEGER NOT NULL, googleCalendarName TEXT NOT NULL,
+                        icsFeedUrl TEXT NOT NULL, lastSyncedAt INTEGER NOT NULL, joinedAt INTEGER NOT NULL
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    INSERT INTO households
+                    SELECT householdId, householdName, pairingCode, selfMemberId, selfRole,
+                        isFounder, '', hubUrl, googleCalendarId, googleCalendarName, icsFeedUrl,
+                        lastSyncedAt, ?
+                    FROM node_config WHERE singletonId = 1 AND householdId <> ''
+                """.trimIndent(), arrayOf(System.currentTimeMillis()))
+                db.execSQL("""
+                    CREATE TABLE node_config_new (
+                        singletonId INTEGER NOT NULL PRIMARY KEY, nodeId TEXT NOT NULL,
+                        irohEndpointId TEXT NOT NULL, deviceType TEXT NOT NULL, darkTheme INTEGER NOT NULL,
+                        activeHouseholdId TEXT NOT NULL, updateReleaseUrl TEXT NOT NULL,
+                        listenPort INTEGER NOT NULL
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    INSERT INTO node_config_new
+                    SELECT singletonId, nodeId, '', deviceType, darkTheme, householdId, updateReleaseUrl, listenPort
+                    FROM node_config WHERE singletonId = 1
+                """.trimIndent())
+                db.execSQL("DROP TABLE node_config")
+                db.execSQL("ALTER TABLE node_config_new RENAME TO node_config")
+
+                db.execSQL("""
+                    CREATE TABLE mesh_peers_new (
+                        householdId TEXT NOT NULL, nodeId TEXT NOT NULL, memberId TEXT NOT NULL,
+                        displayName TEXT NOT NULL, role TEXT NOT NULL, deviceType TEXT NOT NULL,
+                        isFounder INTEGER NOT NULL, lanIp TEXT NOT NULL, port INTEGER NOT NULL,
+                        appVersionCode INTEGER NOT NULL, appVersionName TEXT NOT NULL,
+                        lastSeenAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL,
+                        endpointId TEXT NOT NULL DEFAULT '', PRIMARY KEY (householdId, nodeId)
+                    )
+                """.trimIndent())
+                val migratedHousehold = "(SELECT householdId FROM households LIMIT 1)"
+                db.execSQL("""
+                    INSERT INTO mesh_peers_new
+                    SELECT COALESCE($migratedHousehold, ''), nodeId, memberId, displayName, role, deviceType,
+                        isFounder, lanIp, port, appVersionCode, appVersionName, lastSeenAt, updatedAt, ''
+                    FROM mesh_peers
+                """.trimIndent())
+                db.execSQL("DROP TABLE mesh_peers")
+                db.execSQL("ALTER TABLE mesh_peers_new RENAME TO mesh_peers")
+                db.execSQL("CREATE INDEX index_mesh_peers_householdId ON mesh_peers(householdId)")
+
+                for (table in listOf(
+                    "members", "chores", "completions", "saved_places", "reminders",
+                    "calendar_events", "dinner_options", "grocery_items"
+                )) {
+                    db.execSQL("ALTER TABLE $table ADD COLUMN householdId TEXT NOT NULL DEFAULT ''")
+                    db.execSQL("UPDATE $table SET householdId = COALESCE($migratedHousehold, '')")
+                    db.execSQL("CREATE INDEX index_${table}_householdId ON $table(householdId)")
+                }
+            }
+        }
+
         fun getInstance(context: Context): HomeListDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext,
                     HomeListDatabase::class.java,
                     "homelist_mesh.db"
-                ).addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                ).addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
                     .fallbackToDestructiveMigrationFrom(dropAllTables = true, 1, 2)
                     .build()
                     .also { instance = it }

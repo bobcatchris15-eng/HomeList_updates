@@ -1,4 +1,7 @@
 [versions]
+iroh = "1.0.0"
+jna = "5.15.0"
+zxing = "3.5.4"
 agp = "9.1.1"
 coreKtx = "1.18.0"
 junit = "4.13.2"
@@ -43,6 +46,10 @@ googleid = "1.1.1"
 
 
 [libraries]
+iroh = { group = "computer.iroh", name = "iroh", version.ref = "iroh" }
+jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
+zxing = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
+androidx-lifecycle-process = { group = "androidx.lifecycle", name = "lifecycle-process", version.ref = "lifecycleRuntimeKtx" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }

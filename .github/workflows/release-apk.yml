@@ -19,12 +19,70 @@ permissions:
   contents: write
 
 jobs:
+  build-windows-hub:
+    permissions:
+      contents: read
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Test and build Windows Hub
+        run: |
+          rustup toolchain install 1.100.0 --profile minimal
+          cargo +1.100.0 test --locked --manifest-path windows-hub/rust-hub/Cargo.toml
+          cargo +1.100.0 build --locked --release --manifest-path windows-hub/rust-hub/Cargo.toml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: homelist-windows-hub
+          path: windows-hub/rust-hub/target/release/HomeListHub.exe
+          if-no-files-found: error
+
+  build-iroh-android-libs:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: android-actions/setup-android@v4
+        with:
+          accept-android-sdk-licenses: 'true'
+          packages: 'ndk;28.2.13676358'
+      - name: Build pinned iroh Android libraries
+        shell: bash
+        run: |
+          rustup default 1.100.0
+          rustup target add aarch64-linux-android armv7-linux-androideabi
+          cargo install cargo-ndk --version 3.5.4 --locked
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358"
+          bash scripts/build-iroh-android.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: homelist-iroh-android
+          path: app/src/main/jniLibs/*/libiroh_ffi.so
+          if-no-files-found: error
+
   build-and-release:
+    needs: [build-windows-hub, build-iroh-android-libs]
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: homelist-windows-hub
+          path: windows-hub
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: homelist-iroh-android
+          path: app/src/main/jniLibs
+
+      - name: Verify Android native libraries
+        shell: bash
+        run: |
+          test -s app/src/main/jniLibs/arm64-v8a/libiroh_ffi.so
+          test -s app/src/main/jniLibs/armeabi-v7a/libiroh_ffi.so
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5
@@ -36,7 +94,7 @@ jobs:
         uses: android-actions/setup-android@v4
         with:
           accept-android-sdk-licenses: 'true'
-          packages: 'platforms;android-36.1 platform-tools'
+          packages: 'platforms;android-36.1 platform-tools build-tools;36.0.0'
 
       - name: Accept any remaining Android SDK licenses
         shell: bash
@@ -76,77 +134,51 @@ jobs:
           # (headless CI NullPointerException in ApplicationManager.getApplication())
           sed -i -E 's/googleDevtoolsKsp = "2\.3\.5"/googleDevtoolsKsp = "2.3.14"/' gradle/libs.versions.toml
 
-      - name: Prepare signing keystore & build APK
+      - name: Verify Android repository and migration
+        run: gradle :app:testDebugUnitTest --no-daemon --no-configuration-cache --max-workers=2
+
+      - name: Build and verify rotated release APK
         id: build
         shell: bash
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          HOMELIST_SIGNING_LINEAGE_BASE64: ${{ vars.HOMELIST_SIGNING_LINEAGE_BASE64 }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.version.outputs.name }}
         run: |
-          # Ensure Secrets Gradle Plugin default file exists on clean checkout
-          [ -f .env.example ] || touch .env.example
+          set -euo pipefail
+          : "${KEYSTORE_BASE64:?Configure the release keystore secret}"
+          : "${STORE_PASSWORD:?Configure the keystore password secret}"
+          : "${KEY_PASSWORD:?Configure the signing key password secret}"
+          : "${HOMELIST_SIGNING_LINEAGE_BASE64:?Configure the HomeList signing lineage before releasing}"
 
-          GRADLE_CI_FLAGS=(
-            --no-daemon
-            --no-configuration-cache
-            --stacktrace
-            "-Dorg.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=768m -Djava.awt.headless=true -Dfile.encoding=UTF-8"
+          umask 077
+          signing_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$signing_dir"' EXIT
+          export KEYSTORE_PATH="$signing_dir/homelist-release.p12"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          printf '%s' "$HOMELIST_SIGNING_LINEAGE_BASE64" | base64 --decode > "$signing_dir/lineage.bin"
+          unset KEYSTORE_BASE64 HOMELIST_SIGNING_LINEAGE_BASE64
+
+          gradle :app:assembleRelease -PhomeListRotatedRelease=true \
+            --no-daemon --no-configuration-cache --stacktrace \
+            "-Dorg.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=768m -Djava.awt.headless=true -Dfile.encoding=UTF-8" \
             "-Dorg.gradle.workers.max=2"
-          )
 
-          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_PASSWORD" ]; then
-            printf '%s' "$KEYSTORE_BASE64" | tr -d '\r\n ' | base64 --decode > my-upload-key.jks
-            export KEYSTORE_PATH="$PWD/my-upload-key.jks"
-            CERT_SHA256=$(keytool -list -v -keystore my-upload-key.jks -storepass "$STORE_PASSWORD" -alias upload | grep -m1 'SHA256:' | awk '{print $2}' || true)
-            gradle :app:assembleRelease "${GRADLE_CI_FLAGS[@]}"
-            APK_SRC="app/build/outputs/apk/release/app-release.apk"
-            echo "signed_mode=release" >> "$GITHUB_OUTPUT"
-          else
-            if [ -f debug.keystore.base64 ]; then
-              echo "Using committed debug.keystore.base64"
-              tr -d '\r\n ' < debug.keystore.base64 | base64 --decode > debug.keystore
-            elif git ls-remote --exit-code --heads origin ci-keystore >/dev/null 2>&1; then
-              echo "Restoring persistent signing keystore from origin/ci-keystore branch"
-              git fetch --depth=1 origin ci-keystore:refs/remotes/origin/ci-keystore
-              git show refs/remotes/origin/ci-keystore:debug.keystore.base64 | tr -d '\r\n ' | base64 --decode > debug.keystore
-            else
-              echo "First-time setup: generating one persistent signing keystore and saving to orphan branch ci-keystore"
-              keytool -genkeypair -v \
-                -keystore debug.keystore \
-                -storepass android \
-                -alias androiddebugkey \
-                -keypass android \
-                -keyalg RSA \
-                -keysize 2048 \
-                -validity 10000 \
-                -dname "CN=HomeList CI,O=HomeList,C=US"
-              base64 -w 0 debug.keystore > /tmp/ci-debug.keystore.base64
-              BLOB_SHA=$(git hash-object -w /tmp/ci-debug.keystore.base64)
-              TREE_SHA=$(printf '100644 blob %s\tdebug.keystore.base64\n' "$BLOB_SHA" | git mktree)
-              COMMIT_SHA=$(GIT_AUTHOR_NAME="github-actions[bot]" \
-                GIT_AUTHOR_EMAIL="github-actions[bot]@users.noreply.github.com" \
-                GIT_COMMITTER_NAME="github-actions[bot]" \
-                GIT_COMMITTER_EMAIL="github-actions[bot]@users.noreply.github.com" \
-                git commit-tree "$TREE_SHA" -m "Persist consistent CI signing keystore for in-place APK updates")
-              git push origin "$COMMIT_SHA:refs/heads/ci-keystore"
-              rm -f /tmp/ci-debug.keystore.base64
-            fi
-            CERT_SHA256=$(keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey | grep -m1 'SHA256:' | awk '{print $2}' || true)
-            gradle :app:assembleDebug "${GRADLE_CI_FLAGS[@]}"
-            APK_SRC="app/build/outputs/apk/debug/app-debug.apk"
-            echo "signed_mode=debug-consistent" >> "$GITHUB_OUTPUT"
-          fi
-          echo "cert_sha256=${CERT_SHA256:-unknown}" >> "$GITHUB_OUTPUT"
-
-          OUT_APK="HomeList-${{ steps.version.outputs.tag }}.apk"
-          cp "$APK_SRC" "$OUT_APK"
+          OUT_APK="HomeList-$RELEASE_TAG.apk"
+          CERT_SHA256=$(bash scripts/sign-rotated-apk.sh \
+            app/build/outputs/apk/release/app-release.apk "$OUT_APK" "$signing_dir/lineage.bin" \
+            054c57c9046885c5d409108649bf00297f5eee27df9fd7e00a6c88134622608e)
+          echo "signed_mode=rotated-release" >> "$GITHUB_OUTPUT"
+          echo "cert_sha256=$CERT_SHA256" >> "$GITHUB_OUTPUT"
           echo "apk_path=${OUT_APK}" >> "$GITHUB_OUTPUT"
 
           # Package Windows Home Hub with matching release version
-          printf '%s\n' "${{ steps.version.outputs.name }}" > windows-hub/VERSION.txt
-          OUT_HUB_ZIP="HomeList-Windows-Hub-${{ steps.version.outputs.tag }}.zip"
-          zip -r "$OUT_HUB_ZIP" windows-hub -x "windows-hub/homelist-hub-config.json" "windows-hub/homelist-hub-data.json"
+          printf '%s\n' "$RELEASE_VERSION" > windows-hub/VERSION.txt
+          OUT_HUB_ZIP="HomeList-Windows-Hub-$RELEASE_TAG.zip"
+          zip "$OUT_HUB_ZIP" windows-hub/{HomeListHub.exe,HomeListHub.ps1,Start-HomeListHub.bat,Install-AutoStart.bat,Update-HomeListHub.bat,Update-HomeListHub.ps1,README.md,VERSION.txt}
           echo "hub_zip_path=${OUT_HUB_ZIP}" >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub Release
@@ -162,6 +194,6 @@ jobs:
           body: |
             HomeList release (`${{ steps.build.outputs.signed_mode }}` signed, `versionCode: ${{ steps.version.outputs.code }}`).
 
-            - **Android phones**: Tap the `.apk` asset below to update in place (no uninstall needed once installed with this signing key). Phones auto-check this repository nightly.
+            - **Android phones**: The APK supports updates from the original HomeList CI signer on Android 9 and newer. Phones auto-check this repository nightly.
             - **Signing SHA-256**: `${{ steps.build.outputs.cert_sha256 }}`
             - **Windows Home Hub (optional)**: Download the `.zip` asset below (or run `Update-HomeListHub.bat`). The Windows Hub also checks this same release URL nightly.

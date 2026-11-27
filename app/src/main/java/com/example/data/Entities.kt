@@ -1,6 +1,8 @@
 package com.example.data
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.squareup.moshi.JsonClass
 
@@ -126,10 +128,41 @@ enum class MealSlot(val label: String, val sortOrder: Int) {
     }
 }
 
-@JsonClass(generateAdapter = true)
+const val DEFAULT_UPDATE_RELEASE_URL = "https://github.com/bobcatchris15-eng/HomeList_updates/releases/latest"
+
 @Entity(tableName = "node_config")
 data class NodeConfigEntity(
     @PrimaryKey val singletonId: Int = 1,
+    val nodeId: String,
+    val irohEndpointId: String = "",
+    val deviceType: String = DeviceType.PHONE.name,
+    val darkTheme: Boolean = false,
+    val activeHouseholdId: String = "",
+    val updateReleaseUrl: String = DEFAULT_UPDATE_RELEASE_URL,
+    val listenPort: Int = 8765
+)
+
+@Entity(tableName = "households")
+data class HouseholdEntity(
+    @PrimaryKey val householdId: String,
+    val householdName: String,
+    val pairingCode: String,
+    val selfMemberId: String,
+    val selfRole: String,
+    val isFounder: Boolean = false,
+    val hubEndpointId: String = "",
+    val hubUrl: String = "",
+    val googleCalendarId: Long = -1L,
+    val googleCalendarName: String = "",
+    val icsFeedUrl: String = "",
+    val lastSyncedAt: Long = 0L,
+    val joinedAt: Long = System.currentTimeMillis()
+)
+
+// Also used as the backup configuration so existing v1 backups remain readable.
+@JsonClass(generateAdapter = true)
+data class HouseholdSession(
+    val singletonId: Int = 1,
     val nodeId: String,
     val householdId: String,
     val householdName: String,
@@ -142,16 +175,18 @@ data class NodeConfigEntity(
     val googleCalendarId: Long = -1L,
     val googleCalendarName: String = "",
     val icsFeedUrl: String = "",
-    val updateReleaseUrl: String = "https://github.com/bobcatchris15-eng/HomeList_updates/releases/latest",
+    val updateReleaseUrl: String = DEFAULT_UPDATE_RELEASE_URL,
     val hubUrl: String = "",
     val darkTheme: Boolean = false,
-    val lastSyncedAt: Long = 0L
+    val lastSyncedAt: Long = 0L,
+    val irohEndpointId: String = "",
+    val hubEndpointId: String = ""
 )
 
 @JsonClass(generateAdapter = true)
-@Entity(tableName = "mesh_peers")
+@Entity(tableName = "mesh_peers", primaryKeys = ["householdId", "nodeId"], indices = [Index("householdId")])
 data class MeshPeerEntity(
-    @PrimaryKey val nodeId: String,
+    val nodeId: String,
     val memberId: String,
     val displayName: String,
     val role: String,
@@ -162,11 +197,13 @@ data class MeshPeerEntity(
     val appVersionCode: Int = 1,
     val appVersionName: String = "1.0",
     val lastSeenAt: Long = 0L,
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    @ColumnInfo(defaultValue = "''") val endpointId: String = "",
+    val householdId: String = ""
 )
 
 @JsonClass(generateAdapter = true)
-@Entity(tableName = "members")
+@Entity(tableName = "members", indices = [Index("householdId")])
 data class MemberEntity(
     @PrimaryKey val id: String,
     val displayName: String,
@@ -174,11 +211,12 @@ data class MemberEntity(
     val avatarColorKey: String = "terracotta",
     val avatarIconKey: String = "home",
     val isDeleted: Boolean = false,
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    @ColumnInfo(defaultValue = "''") val householdId: String = ""
 )
 
 @JsonClass(generateAdapter = true)
-@Entity(tableName = "chores")
+@Entity(tableName = "chores", indices = [Index("householdId")])
 data class ChoreEntity(
     @PrimaryKey val id: String,
     val title: String,
@@ -196,7 +234,8 @@ data class ChoreEntity(
     val reminderMinute: Int = 0,
     val remindersEnabled: Boolean = false,
     val isDeleted: Boolean = false,
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    @ColumnInfo(defaultValue = "''") val householdId: String = ""
 ) {
     fun scheduledDays(): Set<Int> =
         daysOfWeekCsv.split(",")
@@ -256,14 +295,15 @@ data class ChoreEntity(
 }
 
 @JsonClass(generateAdapter = true)
-@Entity(tableName = "completions")
+@Entity(tableName = "completions", indices = [Index("householdId")])
 data class CompletionEntity(
     @PrimaryKey val id: String,
     val choreId: String,
     val dateKey: String,
     val completedByMemberId: String,
     val isCompleted: Boolean = true,
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    @ColumnInfo(defaultValue = "''") val householdId: String = ""
 ) {
     companion object {
         fun key(choreId: String, dateKey: String): String = "${choreId}_${dateKey}"
@@ -271,7 +311,7 @@ data class CompletionEntity(
 }
 
 @JsonClass(generateAdapter = true)
-@Entity(tableName = "saved_places")
+@Entity(tableName = "saved_places", indices = [Index("householdId")])
 data class SavedPlaceEntity(
     @PrimaryKey val id: String,
     val name: String,
@@ -280,11 +320,12 @@ data class SavedPlaceEntity(
     val radiusMeters: Int = 200,
     val isHomePlace: Boolean = false,
     val isDeleted: Boolean = false,
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    @ColumnInfo(defaultValue = "''") val householdId: String = ""
 )
 
 @JsonClass(generateAdapter = true)
-@Entity(tableName = "reminders")
+@Entity(tableName = "reminders", indices = [Index("householdId")])
 data class ReminderEntity(
     @PrimaryKey val id: String,
     val title: String,
@@ -304,11 +345,12 @@ data class ReminderEntity(
     val isUrgent: Boolean = false,
     val lastFiredAt: Long = 0L,
     val isDeleted: Boolean = false,
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    @ColumnInfo(defaultValue = "''") val householdId: String = ""
 )
 
 @JsonClass(generateAdapter = true)
-@Entity(tableName = "dinner_options")
+@Entity(tableName = "dinner_options", indices = [Index("householdId")])
 data class DinnerOptionEntity(
     @PrimaryKey val id: String,
     val dateKey: String,
@@ -320,7 +362,8 @@ data class DinnerOptionEntity(
     val voterIdsCsv: String = "",
     val isWinner: Boolean = false,
     val isDeleted: Boolean = false,
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    @ColumnInfo(defaultValue = "''") val householdId: String = ""
 ) {
     fun voterIds(): Set<String> =
         voterIdsCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
@@ -331,7 +374,7 @@ data class DinnerOptionEntity(
 }
 
 @JsonClass(generateAdapter = true)
-@Entity(tableName = "grocery_items")
+@Entity(tableName = "grocery_items", indices = [Index("householdId")])
 data class GroceryItemEntity(
     @PrimaryKey val id: String,
     val name: String,
@@ -345,11 +388,12 @@ data class GroceryItemEntity(
     val checkedByName: String = "",
     val checkedAt: Long = 0L,
     val isDeleted: Boolean = false,
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    @ColumnInfo(defaultValue = "''") val householdId: String = ""
 )
 
 @JsonClass(generateAdapter = true)
-@Entity(tableName = "calendar_events")
+@Entity(tableName = "calendar_events", indices = [Index("householdId")])
 data class CalendarEventEntity(
     @PrimaryKey val id: String,
     val title: String,
@@ -366,7 +410,8 @@ data class CalendarEventEntity(
     val source: String = CalendarSource.HOMELIST.name,
     val externalEventId: String = "",
     val isDeleted: Boolean = false,
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    @ColumnInfo(defaultValue = "''") val householdId: String = ""
 ) {
     fun assignedMemberIds(): Set<String> =
         assignedMemberIdsCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()

@@ -1,4 +1,6 @@
 @echo off
 title Update HomeList Windows Home Hub
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0HomeListHub.ps1" -UpdateNow
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Update-HomeListHub.ps1"
+set "HOMELIST_RESULT=%ERRORLEVEL%"
 pause
+exit /b %HOMELIST_RESULT%

@@ -1,5 +1,6 @@
 package com.example
 
+import android.content.Intent
 import android.Manifest
 import android.os.Build
 import android.os.Bundle
@@ -54,6 +55,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -96,9 +99,16 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        intent.dataString?.let(viewModel::openHouseholdSetup)
         setContent {
             HomeListApp(viewModel = viewModel)
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent.dataString?.let(viewModel::openHouseholdSetup)
     }
 
     override fun onResume() {
@@ -115,21 +125,23 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
     val pinnedCoords by viewModel.pinnedCoordinates.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
-    var currentTab by remember { mutableStateOf(AppTab.TODAY) }
-    var showWallDisplay by remember { mutableStateOf(false) }
+    val householdId = state.config?.householdId
+    var householdMenuOpen by remember { mutableStateOf(false) }
+    var currentTab by remember(householdId) { mutableStateOf(AppTab.TODAY) }
+    var showWallDisplay by remember(householdId) { mutableStateOf(false) }
 
     // Modal editors
-    var showFabMenu by remember { mutableStateOf(false) }
-    var showChoreEditor by remember { mutableStateOf(false) }
-    var editingChore by remember { mutableStateOf<ChoreEntity?>(null) }
-    var showReminderEditor by remember { mutableStateOf(false) }
-    var reminderInitialTitle by remember { mutableStateOf("") }
-    var reminderInitialTrigger by remember { mutableStateOf(ReminderTriggerType.TIME) }
-    var reminderInitialPlaceId by remember { mutableStateOf<String?>(null) }
-    var showLivePushSheet by remember { mutableStateOf(false) }
-    var showPlaceEditor by remember { mutableStateOf(false) }
-    var showEventEditor by remember { mutableStateOf(false) }
-    var eventInitialDate by remember { mutableStateOf(DateStreakUtils.todayKey()) }
+    var showFabMenu by remember(householdId) { mutableStateOf(false) }
+    var showChoreEditor by remember(householdId) { mutableStateOf(false) }
+    var editingChore by remember(householdId) { mutableStateOf<ChoreEntity?>(null) }
+    var showReminderEditor by remember(householdId) { mutableStateOf(false) }
+    var reminderInitialTitle by remember(householdId) { mutableStateOf("") }
+    var reminderInitialTrigger by remember(householdId) { mutableStateOf(ReminderTriggerType.TIME) }
+    var reminderInitialPlaceId by remember(householdId) { mutableStateOf<String?>(null) }
+    var showLivePushSheet by remember(householdId) { mutableStateOf(false) }
+    var showPlaceEditor by remember(householdId) { mutableStateOf(false) }
+    var showEventEditor by remember(householdId) { mutableStateOf(false) }
+    var eventInitialDate by remember(householdId) { mutableStateOf(DateStreakUtils.todayKey()) }
 
     // Live runtime permission state
     var hasNotifications by remember {
@@ -203,7 +215,7 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
         state.groceryItems.count { !it.isChecked }
     }
 
-    BackHandler(enabled = state.isConfigured && !showWallDisplay && currentTab != AppTab.TODAY) {
+    BackHandler(enabled = state.isConfigured && !state.showHouseholdSetup && !showWallDisplay && currentTab != AppTab.TODAY) {
         currentTab = AppTab.TODAY
     }
 
@@ -218,21 +230,20 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
                     }
                 }
 
-                !state.isConfigured -> {
+                state.households.isEmpty() || state.showHouseholdSetup -> {
                     Scaffold(
                         snackbarHost = { SnackbarHost(snackbarHostState) },
                         contentWindowInsets = WindowInsets(0, 0, 0, 0)
                     ) { _ ->
                         OnboardingScreen(
-                            discoveredNodes = state.discoveredNodes,
+                            inviteLink = state.inviteLink,
+                            onClose = if (state.households.isNotEmpty()) viewModel::closeHouseholdSetup else null,
                             isJoining = state.isJoiningMesh,
                             isTablet = isExpandedWidth,
                             onFoundHousehold = { familyName, displayName, colorKey, tablet ->
                                 viewModel.foundHousehold(familyName, displayName, colorKey, tablet)
                             },
-                            onJoinHousehold = { addr, code, displayName, role, colorKey, tablet ->
-                                viewModel.joinHouseholdViaAddress(addr, code, displayName, role, colorKey, tablet)
-                            },
+                            onJoinHousehold = viewModel::joinHouseholdViaEndpoint,
                             onRestoreBackup = {
                                 restoreBackupLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
                             }
@@ -259,13 +270,42 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
                                 ),
                                 title = {
                                     Column {
-                                        Text(
-                                            text = state.config?.householdName ?: "HomeList",
-                                            style = MaterialTheme.typography.titleLarge
-                                        )
+                                        Box {
+                                            androidx.compose.material3.TextButton(onClick = { householdMenuOpen = true }) {
+                                                Text(
+                                                    text = (state.config?.householdName ?: "HomeList") + " ▾",
+                                                    style = MaterialTheme.typography.titleLarge
+                                                )
+                                            }
+                                            DropdownMenu(expanded = householdMenuOpen, onDismissRequest = { householdMenuOpen = false }) {
+                                                state.households.forEach { house ->
+                                                    DropdownMenuItem(
+                                                        text = {
+                                                            Column {
+                                                                Text(house.householdName)
+                                                                val lastSync = if (house.lastSyncedAt == 0L) "Never synced" else
+                                                                    java.text.DateFormat.getDateTimeInstance().format(java.util.Date(house.lastSyncedAt))
+                                                                Text(lastSync, style = MaterialTheme.typography.labelSmall)
+                                                            }
+                                                        },
+                                                        onClick = {
+                                                            householdMenuOpen = false
+                                                            viewModel.switchHousehold(house.householdId)
+                                                        }
+                                                    )
+                                                }
+                                                DropdownMenuItem(
+                                                    text = { Text("+ Add / Join Household") },
+                                                    onClick = {
+                                                        householdMenuOpen = false
+                                                        viewModel.openHouseholdSetup()
+                                                    }
+                                                )
+                                            }
+                                        }
                                         Text(
                                             text = if (currentTab == AppTab.HOUSEHOLD) {
-                                                "Family Mesh & Settings"
+                                                "Household Settings"
                                             } else if (state.isParent) {
                                                 "Parent Mode"
                                             } else {
@@ -621,7 +661,9 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
                                             },
                                             onCheckForUpdates = { viewModel.checkForUpdates(silent = false) },
                                             onUpdateReleaseUrl = { viewModel.updateReleaseUrl(it) },
-                                            onUpdateHubUrl = { viewModel.updateHubUrl(it) },
+                                            onUpdateHubEndpoint = viewModel::updateHubEndpoint,
+                                            onSwitchHousehold = viewModel::switchHousehold,
+                                            onAddHousehold = { viewModel.openHouseholdSetup() },
                                             onExportBackup = {
                                                 val safeName = (state.config?.householdName ?: "HomeList")
                                                     .replace(Regex("[^A-Za-z0-9_-]"), "-")
@@ -631,10 +673,7 @@ private fun HomeListApp(viewModel: HomeListViewModel) {
                                                 restoreBackupLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
                                             },
                                             onToggleDarkTheme = { viewModel.toggleDarkTheme() },
-                                            onLeaveHousehold = {
-                                                currentTab = AppTab.TODAY
-                                                viewModel.leaveHousehold()
-                                            },
+                                            onLeaveHousehold = viewModel::leaveHousehold,
                                             onShowMessage = { viewModel.showMessage(it) }
                                         )
                                     }

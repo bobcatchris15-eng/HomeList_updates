@@ -1,36 +1,31 @@
-# HomeList Windows Founding Hub
+# HomeList Windows Hub
 
-Run this lightweight Founding Hub on your Windows 10/11 desktop so it holds the household's always-on copy and keeps every family phone synced in the background (both on home Wi-Fi and optionally away from home).
+A Windows PC can keep a copy of one or more households and sync with Android devices while it is running. HomeList uses encrypted iroh connections on Wi-Fi and mobile data. Download the Windows Hub ZIP from the same HomeList release as the Android APK.
 
-No Python, Node.js, Docker, or Administrator privileges required.
+## Start the hub and pair a phone
 
-## Quick Start (2 Minutes)
+1. Extract the full ZIP to a writable folder. Run **Start-HomeListHub.bat** and enter a household name.
+2. Install the current HomeList app on the phone. Scan the QR code shown in the hub window, or paste the printed invite under **Join Household**. Enter a display name and choose Parent or Child.
+3. Leave the hub running for background sync. **Install-AutoStart.bat** toggles its startup shortcut.
 
-1. Double-click **`Start-HomeListHub.bat`**.
-2. Enter your **Household Name** and press **Enter** to auto-generate your **6-character Pairing Code** (or type one you prefer).
-   - If Windows Firewall asks, click **Allow access** on Private networks.
-3. On each family phone:
-   - Open HomeList -> **Join a Family**
-   - Enter the **Join Address** (e.g., `192.168.x.x:8765`) and **Pairing Code** printed in the Hub window.
-   - Choose **Parent** or **Child** and tap **Connect & Join Family**.
-4. *(Optional)* Double-click **`Install-AutoStart.bat`** so the Hub starts minimized automatically whenever Windows boots.
+A HomeList invite contains the household pairing code. Share it with household members.
 
-Because this PC holds the persistent copy in `homelist-hub-data.json`, even if a phone is reset or reinstalled, re-joining with the pairing code immediately restores the whole family!
+## Host more households
 
-## Optional: Away-From-Home Sync (Zero Config for Kids)
+Stop the hub before modifying its configuration from the command line. Run these commands from its folder.
 
-To let phones sync over mobile data when away from home without renting any cloud database:
+- `HomeListHub.exe --add "Grandma's Cabin"` creates a household with its own invite.
+- `HomeListHub.exe --join "homelist://join?…"` adds a household using an invite from a running HomeList device. The printed Endpoint ID can also be saved in that household's app settings.
+- `HomeListHub.exe --invites` reprints all invites and the hub Endpoint ID.
 
-1. Expose `http://localhost:8765` using your preferred method:
-   - **Easiest (free HTTPS, no port forwarding):** Install [Cloudflare Tunnel (`cloudflared`)](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) and run:
-     ```bat
-     cloudflared tunnel --url http://localhost:8765
-     ```
-     (Or use a named Cloudflare Tunnel on your own domain for a permanent URL.)
-   - **Or** forward port `8765` / use a home WireGuard VPN to your desktop IP.
-2. Put that URL once into `"hubUrl"` in `homelist-hub-config.json` (or under **Mesh -> Background & Home Hub Sync** on a Parent phone).
-3. Every family phone automatically receives that URL on its next sync—kids never have to configure anything.
+Restart the hub after adding a household. Open [the Wall Board](http://localhost:8765) in a browser on the hub PC and use the dropdown to choose a household.
 
-## Nightly Updates
+## Upgrade from the PowerShell hub
 
-The Windows Hub checks the exact same GitHub Releases URL (`https://github.com/bobcatchris15-eng/HomeList_updates/releases/latest`) every night at ~2:15 AM and notifies you when a new version is published. Double-click **`Update-HomeListHub.bat`** (or press **`U`** in the Hub window) to update while keeping `homelist-hub-config.json` and `homelist-hub-data.json` intact.
+Stop the old hub and extract the new release into the same folder. On first launch the new hub imports the existing household and its data, saves a copy of the v1 configuration, and prints its iroh Endpoint ID. Upgrade the Android devices in place. On a phone already in the household, open its settings and save the new hub Endpoint ID. That connects the existing membership to the new hub and lets the phone sync its endpoint with the other household devices. Existing PowerShell startup shortcuts forward to the new executable after you extract the full ZIP.
+
+## Updates and local data
+
+The hub checks GitHub Releases at startup and daily while running. Stop it and run **Update-HomeListHub.bat** to install a new binary. The updater preserves the hub identity, configuration, and household snapshots.
+
+The hub creates `homelist-hub-key.bin`, `homelist-hub-config.json`, and a `homelist-hub-data-<householdId>.json` snapshot for each household as it syncs. Back up those files together to retain the same endpoint and household state when moving the hub to a new PC.

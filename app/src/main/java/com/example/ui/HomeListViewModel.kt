@@ -27,24 +27,24 @@ import com.example.data.DeviceType
 import com.example.data.DinnerOptionEntity
 import com.example.data.GroceryAisle
 import com.example.data.GroceryItemEntity
-import com.example.data.HomeListDatabase
-import com.example.data.HomeListRepository
 import com.example.data.MealSlot
 import com.example.data.MemberEntity
 import com.example.data.MemberRole
 import com.example.data.MemberStreakStats
 import com.example.data.MeshPeerEntity
-import com.example.data.NodeConfigEntity
+import com.example.data.HouseholdSession
 import com.example.data.PlaceTransition
 import com.example.data.ReminderEntity
 import com.example.data.ReminderTriggerType
 import com.example.data.SavedPlaceEntity
-import com.example.mesh.DiscoveredMeshNode
+import com.example.data.HouseholdEntity
+import com.example.mesh.HouseholdInvite
+import com.example.mesh.MeshRuntime
+import kotlinx.coroutines.CancellationException
 import com.example.mesh.HouseholdBackupSnapshot
 import com.example.mesh.MeshBackgroundSyncJobService
 import com.example.mesh.MeshRuntimeStatus
 import com.example.mesh.MeshSyncEngine
-import com.example.reminders.LocationReminderManager
 import com.example.reminders.PlaceProximityInfo
 import com.example.reminders.ReminderNotificationHelper
 import com.example.updates.AppUpdateChecker
@@ -66,12 +66,12 @@ enum class AppTab(val label: String) {
     MEALS("Meals"),
     REMINDERS("Reminders"),
     CALENDAR("Calendar"),
-    HOUSEHOLD("Mesh")
+    HOUSEHOLD("Households")
 }
 
 data class HomeListUiState(
     val isLoading: Boolean = true,
-    val config: NodeConfigEntity? = null,
+    val config: HouseholdSession? = null,
     val selfMember: MemberEntity? = null,
     val members: List<MemberEntity> = emptyList(),
     val peers: List<MeshPeerEntity> = emptyList(),
@@ -84,7 +84,10 @@ data class HomeListUiState(
     val groceryItems: List<GroceryItemEntity> = emptyList(),
     val memberStats: Map<String, MemberStreakStats> = emptyMap(),
     val meshStatus: MeshRuntimeStatus = MeshRuntimeStatus(),
-    val discoveredNodes: List<DiscoveredMeshNode> = emptyList(),
+    val households: List<HouseholdEntity> = emptyList(),
+    val householdPeerCounts: Map<String, Int> = emptyMap(),
+    val showHouseholdSetup: Boolean = false,
+    val inviteLink: String? = null,
     val placeProximity: Map<String, PlaceProximityInfo> = emptyMap(),
     val deviceCalendars: List<DeviceCalendarInfo> = emptyList(),
     val isCalendarSyncing: Boolean = false,
@@ -99,7 +102,7 @@ data class HomeListUiState(
 }
 
 private data class CoreDbBundle(
-    val config: NodeConfigEntity?,
+    val config: HouseholdSession?,
     val members: List<MemberEntity>,
     val peers: List<MeshPeerEntity>,
     val chores: List<ChoreEntity>,
@@ -115,6 +118,8 @@ private data class ExtraDbBundle(
 )
 
 private data class TransientState(
+    val showHouseholdSetup: Boolean = false,
+    val inviteLink: String? = null,
     val deviceCalendars: List<DeviceCalendarInfo> = emptyList(),
     val isCalendarSyncing: Boolean = false,
     val isJoiningMesh: Boolean = false,
@@ -126,43 +131,16 @@ private data class TransientState(
 
 class HomeListViewModel(application: Application) : AndroidViewModel(application) {
     private val appContext = application.applicationContext
-    private val database = HomeListDatabase.getInstance(appContext)
-    private val repository = HomeListRepository(database.dao())
-    val locationManager = LocationReminderManager(appContext)
+    private val meshRuntime = MeshRuntime.get(appContext)
+    private val repository = meshRuntime.repository
+    val locationManager = meshRuntime.locationManager
     val calendarBridge = GoogleCalendarSyncBridge(appContext)
 
     private val transientState = MutableStateFlow(TransientState())
     private val _pinnedCoordinates = MutableStateFlow<Pair<Double, Double>?>(null)
     val pinnedCoordinates: StateFlow<Pair<Double, Double>?> = _pinnedCoordinates.asStateFlow()
 
-    val meshEngine = MeshSyncEngine(
-        context = appContext,
-        repository = repository,
-        onIncomingReminders = { incoming ->
-            ReminderNotificationHelper.notifyIncomingMeshItems(
-                context = appContext,
-                newReminders = incoming,
-                fulfilledShoppingItems = emptyList()
-            )
-        },
-        onFulfilledShoppingItems = { items ->
-            ReminderNotificationHelper.notifyIncomingMeshItems(
-                context = appContext,
-                newReminders = emptyList(),
-                fulfilledShoppingItems = items,
-                onShoppingSummary = { showMessage(it) }
-            )
-        },
-        onHomeWifiPeerSeen = {
-            viewModelScope.launch {
-                val cfg = repository.getConfig() ?: return@launch
-                val places = repository.getAllPlaces()
-                val reminders = repository.getAllReminders()
-                val fired = locationManager.evaluateHomeWifiArrival(places, reminders, cfg.selfMemberId)
-                fired.forEach { repository.markReminderFired(it) }
-            }
-        }
-    )
+    private val meshEngine = MeshSyncEngine(meshRuntime)
 
     private val coreBundleFlow = combine(
         repository.configFlow,
@@ -171,7 +149,10 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
         repository.choresFlow,
         repository.completionsFlow
     ) { config, members, peers, chores, completions ->
-        CoreDbBundle(config, members, peers, chores, completions)
+        val id = config?.householdId
+        CoreDbBundle(config,
+            members.filter { it.householdId == id }, peers.filter { it.householdId == id },
+            chores.filter { it.householdId == id }, completions.filter { it.householdId == id })
     }
 
     private val extraBundleFlow = combine(
@@ -188,9 +169,12 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
         coreBundleFlow,
         extraBundleFlow,
         meshEngine.status,
-        meshEngine.discoveredNodes,
+        combine(repository.householdsFlow, repository.peerCountsFlow) { households, counts -> households to counts },
         combine(locationManager.proximityMap, transientState) { prox, tr -> prox to tr }
-    ) { core, extra, meshStatus, discovered, (proximity, transient) ->
+    ) { core, extra, meshStatus, (households, peerCounts), (proximity, transient) ->
+        val id = core.config?.householdId
+        val places = extra.places.filter { it.householdId == id }
+        val placeIds = places.map { it.id }.toSet()
         val today = DateStreakUtils.todayKey()
         val statsMap = core.members.associate { member ->
             member.id to DateStreakUtils.computeMemberStats(
@@ -216,22 +200,25 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
             rawUpdate
         }
         HomeListUiState(
-            isLoading = false,
+            isLoading = id == null && households.isNotEmpty(),
             config = core.config,
             selfMember = selfMember,
             members = core.members,
             peers = core.peers,
             chores = core.chores,
             completions = core.completions,
-            places = extra.places,
-            reminders = extra.reminders,
-            events = extra.events,
-            dinnerOptions = extra.dinnerOptions,
-            groceryItems = extra.groceryItems,
+            places = places,
+            reminders = extra.reminders.filter { it.householdId == id },
+            events = extra.events.filter { it.householdId == id },
+            dinnerOptions = extra.dinnerOptions.filter { it.householdId == id },
+            groceryItems = extra.groceryItems.filter { it.householdId == id },
             memberStats = statsMap,
             meshStatus = meshStatus,
-            discoveredNodes = discovered,
-            placeProximity = proximity,
+            households = households,
+            householdPeerCounts = peerCounts,
+            showHouseholdSetup = transient.showHouseholdSetup,
+            inviteLink = transient.inviteLink,
+            placeProximity = proximity.filterKeys { it in placeIds },
             deviceCalendars = transient.deviceCalendars,
             isCalendarSyncing = transient.isCalendarSyncing,
             isJoiningMesh = transient.isJoiningMesh,
@@ -247,23 +234,21 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
 
     init {
         ReminderNotificationHelper.ensureChannels(appContext)
+        viewModelScope.launch { meshRuntime.shoppingSummaries.collect(::showMessage) }
         NightlyUpdateScheduler.scheduleNightlyCheck(appContext)
         viewModelScope.launch {
             val existing = repository.getConfig()
             if (existing != null) {
-                meshEngine.startMeshNode()
                 MeshBackgroundSyncJobService.schedulePeriodicSync(appContext)
                 rescheduleAllNotifications()
                 refreshLocationChecks()
                 checkForUpdates(silent = true)
-            } else {
-                meshEngine.startDiscoveryForOnboarding()
             }
         }
     }
 
     override fun onCleared() {
-        meshEngine.stopMeshNode()
+        meshEngine.close()
         super.onCleared()
     }
 
@@ -273,11 +258,8 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
             val cfg = repository.getConfig()
             if (cfg != null) {
                 MeshBackgroundSyncJobService.schedulePeriodicSync(appContext)
-                meshEngine.refreshLocalAddresses()
-                meshEngine.syncMeshNow(silent = true)
+                meshEngine.syncMeshNow()
                 refreshLocationChecks()
-            } else {
-                meshEngine.startDiscoveryForOnboarding()
             }
         }
     }
@@ -312,70 +294,71 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
                 avatarColorKey = avatarColorKey,
                 deviceType = deviceType
             )
-            meshEngine.startMeshNode()
             MeshBackgroundSyncJobService.schedulePeriodicSync(appContext)
-            showMessage("Founded ${config.householdName}! Pairing code: ${config.pairingCode}")
+            closeHouseholdSetup()
+            meshEngine.gossipAfterLocalChange()
+            showMessage("Created ${config.householdName}")
         }
     }
 
-    fun joinHouseholdViaAddress(
-        rawAddress: String,
-        rawPairingCode: String,
-        displayName: String,
-        role: MemberRole,
-        avatarColorKey: String,
-        isTablet: Boolean
-    ) {
-        if (displayName.isBlank()) {
-            showMessage("Enter your display name first.")
-            return
-        }
-        val trimmedAddr = rawAddress.trim()
-        val isHttpUrl = trimmedAddr.startsWith("https://", ignoreCase = true) ||
-            trimmedAddr.startsWith("http://", ignoreCase = true)
-        val uriParsed = MeshSyncEngine.parsePairingUri(trimmedAddr)
-        val hostOrUrl = when {
-            isHttpUrl -> MeshSyncEngine.normalizeHubBaseUrl(trimmedAddr)
-            uriParsed != null -> uriParsed.first
-            else -> MeshSyncEngine.normalizeHost(trimmedAddr)
-        }
-        val port = uriParsed?.second ?: trimmedAddr.substringAfterLast(":", "8765").toIntOrNull() ?: 8765
-        val code = (uriParsed?.third?.ifBlank { rawPairingCode } ?: rawPairingCode).trim().uppercase()
+    fun openHouseholdSetup(inviteLink: String? = null) {
+        if (inviteLink != null && HouseholdInvite.parse(inviteLink) == null) return
+        transientState.update { it.copy(showHouseholdSetup = true, inviteLink = inviteLink) }
+    }
 
-        if (hostOrUrl.isBlank() || code.length < 4) {
-            showMessage("Enter a peer IP/Hub URL and the 6-character pairing code.")
-            return
-        }
+    fun closeHouseholdSetup() {
+        transientState.update { it.copy(showHouseholdSetup = false, inviteLink = null) }
+    }
 
+    fun switchHousehold(householdId: String) {
         viewModelScope.launch {
-            transientState.update { it.copy(isJoiningMesh = true) }
-            val result = meshEngine.joinViaPeer(hostOrUrl, port, code)
-            transientState.update { it.copy(isJoiningMesh = false) }
-            result.fold(
-                onSuccess = { payload ->
-                    val deviceType = if (isTablet) DeviceType.TABLET else DeviceType.PHONE
-                    repository.joinHousehold(
-                        householdId = payload.householdId,
-                        householdName = payload.householdName,
-                        pairingCode = code,
-                        displayName = displayName,
-                        role = role,
-                        avatarColorKey = avatarColorKey,
-                        deviceType = deviceType,
-                        initialPayload = payload
-                    )
-                    if (isHttpUrl && payload.hubUrl.isBlank()) {
-                        repository.updateConfig { it.copy(hubUrl = hostOrUrl) }
-                    }
-                    meshEngine.startMeshNode()
-                    MeshBackgroundSyncJobService.schedulePeriodicSync(appContext)
-                    rescheduleAllNotifications()
-                    showMessage("Joined ${payload.householdName} as ${role.label}!")
-                },
-                onFailure = { err ->
-                    showMessage(err.message ?: "Could not connect to $hostOrUrl")
+            repository.setActiveHousehold(householdId)
+            clearPinnedCoordinates()
+            refreshLocationChecks()
+        }
+    }
+
+    fun joinHouseholdViaEndpoint(rawLink: String, displayName: String, role: MemberRole, avatarColorKey: String, isTablet: Boolean) {
+        val invite = HouseholdInvite.parse(rawLink)
+        if (invite == null || displayName.isBlank()) {
+            showMessage("Enter a HomeList invite link and your display name.")
+            return
+        }
+        if (transientState.value.isJoiningMesh) return
+        transientState.update { it.copy(isJoiningMesh = true) }
+        viewModelScope.launch {
+            try {
+                val existing = repository.getHousehold(invite.householdId)
+                if (existing != null) {
+                    repository.setActiveHousehold(invite.householdId)
+                    closeHouseholdSetup()
+                    return@launch
                 }
-            )
+                val payload = meshEngine.joinViaEndpoint(invite)
+                repository.joinHousehold(
+                    householdId = invite.householdId,
+                    householdName = payload.householdName.ifBlank { invite.householdName },
+                    pairingCode = invite.pairingCode,
+                    displayName = displayName,
+                    role = role,
+                    avatarColorKey = avatarColorKey,
+                    deviceType = if (isTablet) DeviceType.TABLET else DeviceType.PHONE,
+                    initialPayload = payload,
+                    hubEndpointId = payload.hubEndpointId
+                )
+                MeshBackgroundSyncJobService.schedulePeriodicSync(appContext)
+                closeHouseholdSetup()
+                rescheduleAllNotifications()
+                syncLocationMonitors()
+                meshEngine.gossipAfterLocalChange()
+                showMessage("Joined ${payload.householdName} as ${role.label}")
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                showMessage(error.message ?: "Could not connect to the household")
+            } finally {
+                transientState.update { it.copy(isJoiningMesh = false) }
+            }
         }
     }
 
@@ -383,10 +366,12 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
     // Chores & Streaks
     // -------------------------------------------------------------------------
 
-    fun saveChore(chore: ChoreEntity) {
+    fun saveChore(input: ChoreEntity) {
+        val householdId = input.householdId.ifBlank { uiState.value.config?.householdId ?: return }
+        val chore = input.copy(householdId = householdId)
         if (chore.title.isBlank()) return
         viewModelScope.launch {
-            repository.saveChore(chore)
+            if (repository.saveChore(chore) != true) return@launch
             ReminderNotificationHelper.scheduleChoreReminder(appContext, chore)
             meshEngine.gossipAfterLocalChange()
             showMessage("Saved chore \"${chore.title}\"")
@@ -403,17 +388,19 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun toggleChoreCompletion(choreId: String, dateKey: String = DateStreakUtils.todayKey()) {
+        val config = uiState.value.config ?: return
         viewModelScope.launch {
-            val memberId = repository.getConfig()?.selfMemberId ?: return@launch
-            repository.toggleChoreCompletion(choreId, dateKey, memberId)
+            repository.toggleChoreCompletion(choreId, dateKey, config.selfMemberId, config.householdId)
             meshEngine.gossipAfterLocalChange()
         }
     }
 
     fun sendChoreNudge(chore: ChoreEntity, targetMember: MemberEntity?) {
+        val householdId = chore.householdId
+        if (householdId.isBlank() || (targetMember != null && targetMember.householdId != householdId)) return
         viewModelScope.launch {
-            val config = repository.getConfig() ?: return@launch
-            val self = repository.getAllMembers().firstOrNull { it.id == config.selfMemberId }
+            val config = repository.getConfig(householdId) ?: return@launch
+            val self = repository.getAllMembers(householdId).firstOrNull { it.id == config.selfMemberId }
             val nudge = ReminderEntity(
                 id = UUID.randomUUID().toString(),
                 title = chore.title,
@@ -424,10 +411,11 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
                 linkedChoreId = chore.id,
                 triggerType = ReminderTriggerType.NUDGE.name,
                 isCompleted = false,
+                householdId = householdId,
                 updatedAt = System.currentTimeMillis()
             )
-            repository.saveReminder(nudge)
-            val pushed = meshEngine.syncMeshNow(silent = true)
+            if (repository.saveReminder(nudge) != true) return@launch
+            val pushed = meshEngine.syncMeshNow(householdId)
             val targetName = targetMember?.displayName ?: "family"
             showMessage(
                 if (pushed > 0) "Pushed reminder live to $targetName ($pushed phone${if (pushed == 1) "" else "s"} reached)"
@@ -446,9 +434,10 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
         isUrgent: Boolean
     ) {
         if (message.isBlank()) return
+        val householdId = uiState.value.config?.householdId ?: return
         viewModelScope.launch {
-            val config = repository.getConfig() ?: return@launch
-            val self = repository.getAllMembers().firstOrNull { it.id == config.selfMemberId }
+            val config = repository.getConfig(householdId) ?: return@launch
+            val self = repository.getAllMembers(householdId).firstOrNull { it.id == config.selfMemberId }
             val nudge = ReminderEntity(
                 id = UUID.randomUUID().toString(),
                 title = message.trim(),
@@ -460,10 +449,11 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
                 triggerType = ReminderTriggerType.NUDGE.name,
                 isCompleted = false,
                 isUrgent = isUrgent,
+                householdId = householdId,
                 updatedAt = System.currentTimeMillis()
             )
-            repository.saveReminder(nudge)
-            val pushed = meshEngine.syncMeshNow(silent = false)
+            if (repository.saveReminder(nudge) != true) return@launch
+            val pushed = meshEngine.syncMeshNow(householdId)
             showMessage(
                 if (pushed > 0) "Pushed live to $targetLabel ($pushed peer${if (pushed == 1) "" else "s"} synced)"
                 else "Queued for $targetLabel — will notify as soon as their phone connects"
@@ -573,8 +563,9 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun clearCheckedGroceries() {
+        val householdId = uiState.value.config?.householdId ?: return
         viewModelScope.launch {
-            repository.clearCheckedGroceries()
+            repository.clearCheckedGroceries(householdId)
             meshEngine.gossipAfterLocalChange()
             showMessage("Cleared checked items")
         }
@@ -582,11 +573,11 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
 
     fun completeNudgeAndChore(nudge: ReminderEntity) {
         viewModelScope.launch {
-            val selfId = repository.getConfig()?.selfMemberId ?: return@launch
-            repository.saveReminder(nudge.copy(isCompleted = true))
+            val selfId = repository.getConfig(nudge.householdId)?.selfMemberId ?: return@launch
+            if (repository.saveReminder(nudge.copy(isCompleted = true)) != true) return@launch
             val linkedChoreId = nudge.linkedChoreId
             if (!linkedChoreId.isNullOrBlank()) {
-                repository.setChoreCompleted(linkedChoreId, DateStreakUtils.todayKey(), selfId, true)
+                repository.setChoreCompleted(linkedChoreId, DateStreakUtils.todayKey(), selfId, true, nudge.householdId)
             }
             meshEngine.gossipAfterLocalChange()
             showMessage(
@@ -607,16 +598,18 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
     // Standalone Time & Location Reminders + Saved Places
     // -------------------------------------------------------------------------
 
-    fun saveReminder(reminder: ReminderEntity) {
+    fun saveReminder(input: ReminderEntity) {
+        val householdId = input.householdId.ifBlank { uiState.value.config?.householdId ?: return }
+        val reminder = input.copy(householdId = householdId)
         if (reminder.title.isBlank()) return
         viewModelScope.launch {
-            val config = repository.getConfig() ?: return@launch
-            val self = repository.getAllMembers().firstOrNull { it.id == config.selfMemberId }
+            val config = repository.getConfig(householdId) ?: return@launch
+            val self = repository.getAllMembers(householdId).firstOrNull { it.id == config.selfMemberId }
             val enriched = reminder.copy(
                 createdByMemberId = reminder.createdByMemberId.ifBlank { config.selfMemberId },
                 createdByName = reminder.createdByName.ifBlank { self?.displayName ?: "Family" }
             )
-            repository.saveReminder(enriched)
+            if (repository.saveReminder(enriched) != true) return@launch
             ReminderNotificationHelper.scheduleTimeReminder(appContext, enriched)
             syncLocationMonitors()
             meshEngine.gossipAfterLocalChange()
@@ -693,10 +686,12 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun savePlace(place: SavedPlaceEntity) {
+    fun savePlace(input: SavedPlaceEntity) {
+        val householdId = input.householdId.ifBlank { uiState.value.config?.householdId ?: return }
+        val place = input.copy(householdId = householdId)
         if (place.name.isBlank()) return
         viewModelScope.launch {
-            repository.savePlace(place)
+            if (repository.savePlace(place) != true) return@launch
             syncLocationMonitors()
             refreshLocationChecks()
             meshEngine.gossipAfterLocalChange()
@@ -715,48 +710,57 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
     fun refreshLocationChecks() {
         viewModelScope.launch {
             val cfg = repository.getConfig() ?: return@launch
-            val places = repository.getAllPlaces()
-            val reminders = repository.getAllReminders()
+            val places = repository.getAllPlaces(cfg.householdId)
+            val reminders = repository.getAllReminders(cfg.householdId)
             val fired = locationManager.evaluateLocationReminders(places, reminders, cfg.selfMemberId)
             fired.forEach { repository.markReminderFired(it) }
-            locationManager.syncGeofences(places, reminders, cfg.selfMemberId)
+            syncLocationMonitors()
         }
     }
 
     private suspend fun syncLocationMonitors() {
-        val cfg = repository.getConfig() ?: return
+        val houses = repository.getAllHouseholds()
         locationManager.syncGeofences(
-            places = repository.getAllPlaces(),
-            reminders = repository.getAllReminders(),
-            selfMemberId = cfg.selfMemberId
+            places = houses.flatMap { repository.getAllPlaces(it.householdId) },
+            reminders = houses.flatMap { repository.getAllReminders(it.householdId) },
+            memberIdsByHousehold = houses.associate { it.householdId to it.selfMemberId }
         )
     }
 
     private suspend fun rescheduleAllNotifications() {
-        val cfg = repository.getConfig() ?: return
         val today = DateStreakUtils.todayKey()
-        repository.getAllChores()
-            .filter { chore ->
+        for (house in repository.getAllHouseholds()) {
+            val id = house.householdId
+            repository.getAllChores(id).forEach { chore ->
                 val effective = chore.effectiveAssigneeForDate(today)
-                !chore.isDeleted && (effective == null || effective == cfg.selfMemberId)
+                if (!chore.isDeleted && (effective == null || effective == house.selfMemberId)) {
+                    ReminderNotificationHelper.scheduleChoreReminder(appContext, chore)
+                } else {
+                    ReminderNotificationHelper.cancelScheduled(appContext, chore.id.hashCode())
+                }
             }
-            .forEach { ReminderNotificationHelper.scheduleChoreReminder(appContext, it) }
-
-        repository.getAllReminders()
-            .filter { !it.isDeleted && !it.isCompleted && (it.assignedToMemberId == null || it.assignedToMemberId == cfg.selfMemberId) }
-            .forEach { ReminderNotificationHelper.scheduleTimeReminder(appContext, it) }
+            repository.getAllReminders(id).forEach { reminder ->
+                if (reminder.assignedToMemberId == null || reminder.assignedToMemberId == house.selfMemberId) {
+                    ReminderNotificationHelper.scheduleTimeReminder(appContext, reminder)
+                } else {
+                    ReminderNotificationHelper.cancelScheduled(appContext, reminder.id.hashCode())
+                }
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
     // Family Calendar Events & Two-Way Google Calendar Sync
     // -------------------------------------------------------------------------
 
-    fun saveCalendarEvent(event: CalendarEventEntity, alsoExportToGoogle: Boolean = false) {
+    fun saveCalendarEvent(input: CalendarEventEntity, alsoExportToGoogle: Boolean = false) {
+        val householdId = input.householdId.ifBlank { uiState.value.config?.householdId ?: return }
+        val event = input.copy(householdId = householdId)
         if (event.title.isBlank()) return
         viewModelScope.launch {
             var toSave = event
             if (alsoExportToGoogle) {
-                val cfg = repository.getConfig()
+                val cfg = repository.getConfig(householdId)
                 if (cfg != null && cfg.googleCalendarId > 0L && calendarBridge.hasWritePermission()) {
                     calendarBridge.exportEventToDeviceCalendar(cfg.googleCalendarId, event)
                         .onSuccess { createdId ->
@@ -766,7 +770,7 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
                         }
                 }
             }
-            repository.saveCalendarEvent(toSave)
+            if (repository.saveCalendarEvent(toSave) != true) return@launch
             meshEngine.gossipAfterLocalChange()
             showMessage(
                 if (alsoExportToGoogle && toSave.externalEventId.isNotBlank()) {
@@ -796,16 +800,17 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun selectAndSyncGoogleCalendar(calendar: DeviceCalendarInfo) {
+        val householdId = uiState.value.config?.householdId ?: return
         viewModelScope.launch {
             transientState.update { it.copy(isCalendarSyncing = true) }
-            repository.updateConfig {
+            repository.updateConfig(householdId) {
                 it.copy(googleCalendarId = calendar.id, googleCalendarName = calendar.displayName)
             }
             val result = calendarBridge.importFromDeviceCalendar(calendar.id)
             transientState.update { it.copy(isCalendarSyncing = false) }
             result.fold(
                 onSuccess = { events ->
-                    repository.upsertImportedEvents(events)
+                    repository.upsertImportedEvents(events, householdId)
                     meshEngine.gossipAfterLocalChange()
                     showMessage("Synced ${events.size} event${if (events.size == 1) "" else "s"} from ${calendar.displayName}")
                 },
@@ -817,8 +822,9 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun syncConfiguredGoogleCalendar() {
+        val householdId = uiState.value.config?.householdId ?: return
         viewModelScope.launch {
-            val cfg = repository.getConfig() ?: return@launch
+            val cfg = repository.getConfig(householdId) ?: return@launch
             if (cfg.googleCalendarId <= 0L) {
                 loadDeviceCalendars()
                 return@launch
@@ -828,7 +834,7 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
             transientState.update { it.copy(isCalendarSyncing = false) }
             result.fold(
                 onSuccess = { events ->
-                    repository.upsertImportedEvents(events)
+                    repository.upsertImportedEvents(events, householdId)
                     meshEngine.gossipAfterLocalChange()
                     showMessage("Refreshed ${events.size} Google Calendar events")
                 },
@@ -840,14 +846,15 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun importIcsFeed(url: String) {
+        val householdId = uiState.value.config?.householdId ?: return
         viewModelScope.launch {
             transientState.update { it.copy(isCalendarSyncing = true) }
-            repository.updateConfig { it.copy(icsFeedUrl = url.trim()) }
+            repository.updateConfig(householdId) { it.copy(icsFeedUrl = url.trim()) }
             val result = calendarBridge.importFromIcsUrl(url)
             transientState.update { it.copy(isCalendarSyncing = false) }
             result.fold(
                 onSuccess = { events ->
-                    repository.upsertImportedEvents(events)
+                    repository.upsertImportedEvents(events, householdId)
                     meshEngine.gossipAfterLocalChange()
                     showMessage("Imported ${events.size} events from .ics feed")
                 },
@@ -867,7 +874,7 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
 
     fun syncMeshNow() {
         viewModelScope.launch {
-            val count = meshEngine.syncMeshNow(silent = false)
+            val count = meshEngine.syncMeshNow()
             if (count > 0) {
                 showMessage("Wi-Fi mesh synced with $count peer${if (count == 1) "" else "s"}")
             } else {
@@ -948,29 +955,22 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun updateHubUrl(rawUrl: String) {
-        val normalized = MeshSyncEngine.normalizeHubBaseUrl(rawUrl)
+    fun updateHubEndpoint(rawEndpoint: String) {
+        val householdId = uiState.value.config?.householdId ?: return
+        val invite = HouseholdInvite.parse(rawEndpoint)
+        if (invite != null && invite.householdId != householdId) {
+            showMessage("That invite belongs to another household.")
+            return
+        }
+        val endpoint = invite?.endpointId ?: rawEndpoint.trim()
+        if (endpoint.isNotEmpty() && !endpoint.matches(Regex("[A-Za-z0-9]{52,64}"))) {
+            showMessage("Enter a HomeList hub Endpoint ID or invite link.")
+            return
+        }
         viewModelScope.launch {
-            repository.updateConfig { it.copy(hubUrl = normalized) }
-            if (normalized.isBlank()) {
-                meshEngine.syncMeshNow(silent = true)
-                showMessage("Cleared optional Home Hub URL — using home Wi-Fi sync")
-            } else {
-                val health = meshEngine.probeHubHealth(normalized)
-                val synced = meshEngine.syncMeshNow(silent = false)
-                health.fold(
-                    onSuccess = { node ->
-                        showMessage("Connected to ${node.displayName} & shared with family mesh!")
-                    },
-                    onFailure = {
-                        if (synced > 0) {
-                            showMessage("Saved Home Hub URL & synced")
-                        } else {
-                            showMessage("Saved Home Hub URL (hub not reachable yet — will retry in background)")
-                        }
-                    }
-                )
-            }
+            repository.updateConfig(householdId) { it.copy(hubEndpointId = endpoint) }
+            meshEngine.gossipAfterLocalChange()
+            showMessage(if (endpoint.isBlank()) "Removed Home Hub" else "Home Hub saved")
         }
     }
 
@@ -1012,7 +1012,11 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
                     val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
                     val snapshot = moshi.adapter(HouseholdBackupSnapshot::class.java).fromJson(json)
                         ?: return@withContext Result.failure<String>(IllegalStateException("File is not a valid HomeList backup"))
+                    val householdId = snapshot.config.householdId
+                    val oldAlarms = repository.getAllChores(householdId).map { it.id } +
+                        repository.getAllReminders(householdId).map { it.id }
                     val restored = repository.restoreBackupSnapshot(snapshot)
+                    oldAlarms.forEach { ReminderNotificationHelper.cancelScheduled(appContext, it.hashCode()) }
                     Result.success(restored.householdName)
                 } catch (e: Exception) {
                     Result.failure(e)
@@ -1020,7 +1024,7 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
             }
             result.fold(
                 onSuccess = { name ->
-                    meshEngine.startMeshNode()
+                    closeHouseholdSetup()
                     MeshBackgroundSyncJobService.schedulePeriodicSync(appContext)
                     rescheduleAllNotifications()
                     refreshLocationChecks()
@@ -1033,13 +1037,16 @@ class HomeListViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun leaveHousehold() {
+    fun leaveHousehold(householdId: String) {
         viewModelScope.launch {
-            meshEngine.stopMeshNode()
-            MeshBackgroundSyncJobService.cancelPeriodicSync(appContext)
-            repository.leaveHousehold()
-            meshEngine.startDiscoveryForOnboarding()
-            showMessage("Left household grouping")
+            val household = repository.getHousehold(householdId) ?: return@launch
+            val alarms = repository.getAllChores(householdId).map { it.id } +
+                repository.getAllReminders(householdId).map { it.id }
+            repository.leaveHousehold(householdId)
+            alarms.forEach { ReminderNotificationHelper.cancelScheduled(appContext, it.hashCode()) }
+            if (repository.getAllHouseholds().isEmpty()) MeshBackgroundSyncJobService.cancelPeriodicSync(appContext)
+            syncLocationMonitors()
+            showMessage("Left ${household.householdName}")
         }
     }
 }

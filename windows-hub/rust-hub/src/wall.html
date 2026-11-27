@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HomeList Wall Board</title>
+<style>
+:root { color-scheme: light; font: 18px system-ui, sans-serif; color: #382a24; background: #faf2e9 }
+body { box-sizing: border-box; max-width: 68rem; margin: 0 auto; padding: 2rem clamp(1rem, 4vw, 3rem) }
+header { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; justify-content: space-between }
+h1 { font: 600 clamp(2rem, 6vw, 4rem) Georgia, serif; margin: .25em 0 }
+h2 { font: 600 1.5rem Georgia, serif; margin: 0 0 .5em }
+select { font: inherit; padding: .5rem; color: inherit; background: #fffaf5; border: 1px solid #bb9d89; border-radius: .5rem }
+main { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr)); margin-top: 1rem }
+section { border: 1px solid #e8d8ca; border-radius: 1rem; background: #fffaf5; padding: 1.15rem }
+ul { list-style: none; padding: 0; margin: 0 } li { padding: .5em 0; border-bottom: 1px solid #e8d8ca }
+li:last-child { border: 0 } p { margin: .4em 0 } #status { color: #75442f }
+</style>
+</head>
+<body>
+<header>
+<div><p id="date"></p><h1 id="name">HomeList</h1></div>
+<label>Household <select id="house"></select></label>
+</header>
+<p id="status" role="status"></p>
+<main>
+<section><h2>Chores today</h2><p id="totals"></p><ul id="members"></ul></section>
+<section><h2>Dinner</h2><p id="dinner"></p></section>
+<section><h2>Upcoming events</h2><ul id="events"></ul></section>
+</main>
+<script>
+const get = id => document.getElementById(id);
+const select = get('house');
+const status = get('status');
+const item = text => { const li = document.createElement('li'); li.textContent = text; return li; };
+let requestNumber = 0;
+async function refresh() {
+  if (!select.value) return;
+  const number = ++requestNumber;
+  try {
+    const query = new URLSearchParams({ householdId: select.value });
+    const response = await fetch('/api/v1/wall-snapshot?' + query, { cache: 'no-store' });
+    if (!response.ok) throw new Error();
+    const state = await response.json();
+    if (number !== requestNumber) return;
+    get('name').textContent = state.householdName;
+    get('date').textContent = state.todayDateLabel;
+    get('totals').textContent = state.overallCompleted + ' of ' + state.overallTotal + ' complete';
+    get('members').replaceChildren(...state.members.map(m => item(m.displayName + ' · ' + m.todayCompleted + '/' + m.todayTotal)));
+    get('dinner').textContent = state.tonightDinner || 'No dinner planned';
+    get('events').replaceChildren(...(state.upcomingEvents.length ? state.upcomingEvents.map(e =>
+      item([e.dateKey, e.timeLabel, e.title, e.location].filter(Boolean).join(' · '))) : [item('No upcoming events')]));
+    status.textContent = '';
+  } catch {
+    if (number === requestNumber) status.textContent = 'Unable to refresh the wall board.';
+  }
+}
+async function start() {
+  try {
+    const response = await fetch('/api/v1/wall-households', { cache: 'no-store' });
+    if (!response.ok) throw new Error();
+    for (const house of await response.json()) select.add(new Option(house.householdName, house.householdId));
+    const id = new URLSearchParams(location.search).get('householdId');
+    if ([...select.options].some(option => option.value === id)) select.value = id;
+    select.addEventListener('change', refresh);
+    refresh();
+    setInterval(refresh, 10000);
+  } catch { status.textContent = 'Unable to load households.'; }
+}
+start();
+</script>
+</body>
+</html>

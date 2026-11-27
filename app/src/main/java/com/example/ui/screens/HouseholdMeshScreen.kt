@@ -31,7 +31,6 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.outlined.Computer
-import androidx.compose.material.icons.outlined.Logout
 import androidx.compose.material.icons.outlined.VpnKey
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -64,6 +63,13 @@ import com.example.data.MemberRole
 import com.example.ui.HomeListUiState
 import com.example.ui.components.MemberAvatarBadge
 import com.example.ui.components.iconForDeviceType
+import android.graphics.Bitmap
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
+import com.example.data.HouseholdEntity
+import com.example.mesh.HouseholdInvite
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.qrcode.QRCodeWriter
 import com.example.updates.AppUpdateChecker
 import com.example.updates.NightlyUpdateScheduler
 
@@ -74,11 +80,13 @@ fun HouseholdMeshScreen(
     onAddManualMember: (name: String, role: MemberRole, colorKey: String) -> Unit,
     onCheckForUpdates: () -> Unit,
     onUpdateReleaseUrl: (String) -> Unit,
-    onUpdateHubUrl: (String) -> Unit,
+    onUpdateHubEndpoint: (String) -> Unit,
+    onSwitchHousehold: (String) -> Unit,
+    onAddHousehold: () -> Unit,
     onExportBackup: () -> Unit,
     onRestoreBackup: () -> Unit,
     onToggleDarkTheme: () -> Unit,
-    onLeaveHousehold: () -> Unit,
+    onLeaveHousehold: (String) -> Unit,
     onShowMessage: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -89,16 +97,14 @@ fun HouseholdMeshScreen(
     var releaseUrlDraft by remember(config.updateReleaseUrl) {
         mutableStateOf(config.updateReleaseUrl.ifBlank { AppUpdateChecker.DEFAULT_RELEASES_URL })
     }
-    var hubUrlDraft by remember(config.hubUrl) {
-        mutableStateOf(config.hubUrl)
+    var hubEndpointDraft by remember(config.hubEndpointId) {
+        mutableStateOf(config.hubEndpointId)
     }
     var showAddMemberDialog by remember { mutableStateOf(false) }
-    var showLeaveConfirmDialog by remember { mutableStateOf(false) }
-
-    val pairingLink = if (mesh.lanIp.isNotBlank()) {
-        "homelist://${mesh.lanIp}:${mesh.listenPort}?code=${config.pairingCode}"
-    } else {
-        config.pairingCode
+    var pendingLeave by remember { mutableStateOf<HouseholdEntity?>(null) }
+    var qrHousehold by remember { mutableStateOf<HouseholdEntity?>(null) }
+    fun inviteFor(house: HouseholdEntity): String? = config.irohEndpointId.takeIf { it.isNotBlank() }?.let { endpoint ->
+        HouseholdInvite(endpoint, house.householdId, house.pairingCode, house.householdName).toUri().toString()
     }
 
     LazyColumn(
@@ -106,127 +112,73 @@ fun HouseholdMeshScreen(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // Pairing Code & Mesh Identity Card
-        item(key = "pairing_card") {
-            Surface(
-                shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.surface,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        item(key = "household_actions") {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                Text("Joined households", style = MaterialTheme.typography.titleLarge)
+                TextButton(onClick = onAddHousehold) { Text("+ Add / Join") }
+            }
+        }
+        for (house in state.households) {
+            item(key = "household_${house.householdId}") {
+                val active = house.householdId == config.householdId
+                val link = inviteFor(house)
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Column {
-                            Text(config.householdName, style = MaterialTheme.typography.headlineSmall)
-                            Text(
-                                text = if (config.isFounder) "Founder Node • Pure Peer Mesh" else "Family Mesh Peer",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.primaryContainer,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable {
-                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                                    clipboard?.setPrimaryClip(ClipData.newPlainText("HomeList Pairing Code", config.pairingCode))
-                                    onShowMessage("Copied pairing code: ${config.pairingCode}")
-                                }
-                                .testTag("pairing_code_pill")
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Icon(
-                                    Icons.Outlined.VpnKey,
-                                    contentDescription = "Pairing code",
-                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Text(
-                                    text = config.pairingCode,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
-                                Icon(
-                                    Icons.Filled.ContentCopy,
-                                    contentDescription = "Tap to copy pairing code",
-                                    tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
-                                    modifier = Modifier.size(14.dp)
-                                )
+                            Text(house.householdName, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                            if (!active) {
+                                TextButton(onClick = { onSwitchHousehold(house.householdId) }) { Text("Switch") }
                             }
                         }
-                    }
-
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-                    AddressRow(
-                        label = "Home Wi-Fi IP",
-                        value = if (mesh.lanIp.isNotBlank()) "${mesh.lanIp}:${mesh.listenPort}" else "Connect to Wi-Fi"
-                    )
-                    if (mesh.lanIp.isNotBlank()) {
-                        AddressRow(
-                            label = "Pi / Browser Wall URL",
-                            value = "http://${mesh.lanIp}:${mesh.listenPort}"
-                        )
-                    }
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
-                            onClick = {
-                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                                clipboard?.setPrimaryClip(ClipData.newPlainText("HomeList Pairing Code", config.pairingCode))
-                                onShowMessage("Copied pairing code: ${config.pairingCode}")
-                            },
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("copy_pairing_code_button")
-                        ) {
-                            Icon(Icons.Filled.ContentCopy, null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Copy Code")
+                        Text("${MemberRole.fromString(house.selfRole).label} · Code ${house.pairingCode}")
+                        val hub = when {
+                            house.householdId in mesh.connectedHubs -> "Hub connected"
+                            house.hubEndpointId.isNotBlank() -> "Hub saved"
+                            else -> "No hub"
                         }
-                        Button(
-                            onClick = {
-                                val sendIntent = Intent(Intent.ACTION_SEND).apply {
-                                    type = "text/plain"
-                                    putExtra(Intent.EXTRA_SUBJECT, "Join ${config.householdName} on HomeList")
-                                    putExtra(
-                                        Intent.EXTRA_TEXT,
-                                        "Join ${config.householdName} in HomeList!\nPairing code: ${config.pairingCode}\nLink: $pairingLink"
-                                    )
+                        val count = state.householdPeerCounts[house.householdId] ?: 0
+                        Text(
+                            text = "$count paired device${if (count == 1) "" else "s"} · $hub",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            TextButton(
+                                enabled = link != null,
+                                onClick = {
+                                    val send = Intent(Intent.ACTION_SEND).apply {
+                                        type = "text/plain"
+                                        putExtra(Intent.EXTRA_TEXT, link)
+                                    }
+                                    context.startActivity(Intent.createChooser(send, "Share HomeList invite"))
                                 }
-                                context.startActivity(Intent.createChooser(sendIntent, "Share HomeList Invite"))
-                            },
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("share_pairing_code_button")
-                        ) {
-                            Icon(Icons.Filled.Share, null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Share Invite")
+                            ) { Text("Share link") }
+                            TextButton(enabled = link != null, onClick = { qrHousehold = house }) { Text("QR code") }
+                            TextButton(
+                                onClick = { pendingLeave = house },
+                                modifier = if (active) Modifier.testTag("leave_household_button") else Modifier
+                            ) { Text("Leave") }
                         }
                     }
                 }
             }
         }
 
-        // Synced Peer Address Book (Wi-Fi Mesh Directory)
+        // Paired devices for the active household
         item(key = "peer_book_header") {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -300,7 +252,7 @@ fun HouseholdMeshScreen(
                         )
                         if (peer.lanIp.isNotBlank()) {
                             Text(
-                                text = "Wi-Fi ${peer.lanIp}:${peer.port}",
+                                text = peer.endpointId.takeIf { it.isNotBlank() }?.let { "Endpoint ${it.take(14)}…" } ?: "Waiting for updated peer identity",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.secondary
                             )
@@ -346,19 +298,19 @@ fun HouseholdMeshScreen(
                                 )
                             }
                         }
-                        if (config.hubUrl.isNotBlank()) {
+                        if (config.hubEndpointId.isNotBlank()) {
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
-                                color = if (mesh.hubConnected) {
+                                color = if ((config.householdId in mesh.connectedHubs)) {
                                     MaterialTheme.colorScheme.secondaryContainer
                                 } else {
                                     MaterialTheme.colorScheme.surfaceContainerHigh
                                 }
                             ) {
                                 Text(
-                                    text = if (mesh.hubConnected) "Hub Live" else "Hub Saved",
+                                    text = if ((config.householdId in mesh.connectedHubs)) "Hub Live" else "Hub Saved",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = if (mesh.hubConnected) {
+                                    color = if ((config.householdId in mesh.connectedHubs)) {
                                         MaterialTheme.colorScheme.onSecondaryContainer
                                     } else {
                                         MaterialTheme.colorScheme.onSurfaceVariant
@@ -370,17 +322,17 @@ fun HouseholdMeshScreen(
                     }
 
                     Text(
-                        text = "Optional: run the Windows Home Hub on a home PC so family phones stay synced even away from home. Set it once here and every family phone picks it up automatically.",
+                        text = "Optional: run the Windows Home Hub on a home PC so family phones stay synced even away from home. Enter its Endpoint ID to use it as a sync peer for this household.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
                     if (state.isParent) {
                         OutlinedTextField(
-                            value = hubUrlDraft,
-                            onValueChange = { hubUrlDraft = it },
-                            label = { Text("Optional Home Hub URL") },
-                            placeholder = { Text("https://hub.yourhome.com or 192.168.1.50:8765") },
+                            value = hubEndpointDraft,
+                            onValueChange = { hubEndpointDraft = it },
+                            label = { Text("Home Hub Endpoint ID") },
+                            placeholder = { Text("Paste the hub Endpoint ID or invite link") },
                             singleLine = true,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -388,20 +340,20 @@ fun HouseholdMeshScreen(
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(
-                                onClick = { onUpdateHubUrl(hubUrlDraft) },
-                                enabled = hubUrlDraft.isNotBlank() && !mesh.isSyncing,
+                                onClick = { onUpdateHubEndpoint(hubEndpointDraft) },
+                                enabled = hubEndpointDraft.isNotBlank() && !mesh.isSyncing,
                                 shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier
                                     .weight(1f)
                                     .testTag("save_home_hub_button")
                             ) {
-                                Text("Save & Test Hub")
+                                Text("Save Hub")
                             }
-                            if (config.hubUrl.isNotBlank()) {
+                            if (config.hubEndpointId.isNotBlank()) {
                                 OutlinedButton(
                                     onClick = {
-                                        hubUrlDraft = ""
-                                        onUpdateHubUrl("")
+                                        hubEndpointDraft = ""
+                                        onUpdateHubEndpoint("")
                                     },
                                     shape = RoundedCornerShape(12.dp),
                                     modifier = Modifier.testTag("clear_home_hub_button")
@@ -410,7 +362,7 @@ fun HouseholdMeshScreen(
                                 }
                             }
                         }
-                    } else if (config.hubUrl.isNotBlank()) {
+                    } else if (config.hubEndpointId.isNotBlank()) {
                         AddressRow(
                             label = "Away-from-home Hub",
                             value = "Auto-configured by household"
@@ -679,19 +631,7 @@ fun HouseholdMeshScreen(
                         }
                     }
 
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-                    OutlinedButton(
-                        onClick = { showLeaveConfirmDialog = true },
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("leave_household_button")
-                    ) {
-                        Icon(Icons.Outlined.Logout, null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Leave Family Grouping on This Phone")
-                    }
                 }
             }
         }
@@ -747,25 +687,40 @@ fun HouseholdMeshScreen(
         )
     }
 
-    if (showLeaveConfirmDialog) {
+    pendingLeave?.let { house ->
         AlertDialog(
-            onDismissRequest = { showLeaveConfirmDialog = false },
-            title = { Text("Leave ${config.householdName}?") },
-            text = {
-                Text("This clears HomeList data on this phone only. Other family phones keep their synced copies.")
-            },
+            onDismissRequest = { pendingLeave = null },
+            title = { Text("Leave ${house.householdName}?") },
+            text = { Text("This removes ${house.householdName} from this device. Other devices keep their synced copies.") },
             confirmButton = {
                 Button(
                     onClick = {
-                        showLeaveConfirmDialog = false
-                        onLeaveHousehold()
-                    }
+                        pendingLeave = null
+                        onLeaveHousehold(house.householdId)
+                    },
+                    modifier = Modifier.testTag("confirm_leave_household")
                 ) { Text("Leave") }
             },
-            dismissButton = {
-                TextButton(onClick = { showLeaveConfirmDialog = false }) { Text("Cancel") }
-            }
+            dismissButton = { TextButton(onClick = { pendingLeave = null }) { Text("Cancel") } }
         )
+    }
+    qrHousehold?.let { house ->
+        val link = inviteFor(house)
+        if (link != null) {
+            val qr = remember(link) {
+                val bits = QRCodeWriter().encode(link, BarcodeFormat.QR_CODE, 300, 300)
+                val colors = IntArray(bits.width * bits.height) { pixel ->
+                    if (bits[pixel % bits.width, pixel / bits.width]) android.graphics.Color.BLACK else android.graphics.Color.WHITE
+                }
+                Bitmap.createBitmap(colors, bits.width, bits.height, Bitmap.Config.ARGB_8888).asImageBitmap()
+            }
+            AlertDialog(
+                onDismissRequest = { qrHousehold = null },
+                title = { Text("Join ${house.householdName}") },
+                text = { Image(qr, contentDescription = "HomeList household invite QR code", modifier = Modifier.fillMaxWidth()) },
+                confirmButton = { TextButton(onClick = { qrHousehold = null }) { Text("Done") } }
+            )
+        }
     }
 }
 

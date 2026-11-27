@@ -142,7 +142,7 @@ class LocationReminderManager(context: Context) {
                 }
             }
         }
-        _proximityMap.value = updatedMap
+        _proximityMap.value = _proximityMap.value + updatedMap
         return triggered
     }
 
@@ -194,7 +194,9 @@ class LocationReminderManager(context: Context) {
         return triggered
     }
 
-    fun syncGeofences(places: List<SavedPlaceEntity>, reminders: List<ReminderEntity>, selfMemberId: String) {
+    fun syncGeofences(
+        places: List<SavedPlaceEntity>, reminders: List<ReminderEntity>, memberIdsByHousehold: Map<String, String>
+    ) {
         if (!hasForegroundLocationPermission()) return
         val placesById = places.filter { !it.isDeleted && (it.latitude != 0.0 || it.longitude != 0.0) }
             .associateBy { it.id }
@@ -203,8 +205,8 @@ class LocationReminderManager(context: Context) {
             val type = ReminderTriggerType.fromString(rem.triggerType)
             if (rem.isDeleted || rem.isCompleted) return@mapNotNull null
             if (type != ReminderTriggerType.LOCATION && type != ReminderTriggerType.TIME_AND_LOCATION) return@mapNotNull null
-            if (rem.assignedToMemberId != null && rem.assignedToMemberId != selfMemberId) return@mapNotNull null
-            val place = placesById[rem.placeId] ?: return@mapNotNull null
+            if (rem.assignedToMemberId != null && rem.assignedToMemberId != memberIdsByHousehold[rem.householdId]) return@mapNotNull null
+            val place = placesById[rem.placeId]?.takeIf { it.householdId == rem.householdId } ?: return@mapNotNull null
             val transFlag = if (PlaceTransition.fromString(rem.placeTransition) == PlaceTransition.LEAVE) {
                 Geofence.GEOFENCE_TRANSITION_EXIT
             } else {

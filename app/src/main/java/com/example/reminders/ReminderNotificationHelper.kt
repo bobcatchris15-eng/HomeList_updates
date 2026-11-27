@@ -163,8 +163,10 @@ object ReminderNotificationHelper {
         context: Context,
         newReminders: List<ReminderEntity>,
         fulfilledShoppingItems: List<GroceryItemEntity>,
+        householdName: String? = null,
         onShoppingSummary: (String) -> Unit = {}
     ) {
+        val prefix = householdName?.takeIf(String::isNotBlank)?.let { "[$it] " }.orEmpty()
         newReminders.forEach { rem ->
             val isNudge = ReminderTriggerType.fromString(rem.triggerType) == ReminderTriggerType.NUDGE
             val title = when {
@@ -176,7 +178,7 @@ object ReminderNotificationHelper {
             postNotification(
                 context = context,
                 notificationId = rem.id.hashCode(),
-                title = title,
+                title = prefix + title,
                 body = body,
                 channelId = if (isNudge) CHANNEL_NUDGES else CHANNEL_REMINDERS
             )
@@ -196,11 +198,11 @@ object ReminderNotificationHelper {
                 postNotification(
                     context = context,
                     notificationId = ("shopping_got_${checkedItems.first().id}").hashCode(),
-                    title = notifTitle,
+                    title = prefix + notifTitle,
                     body = notifBody,
                     channelId = CHANNEL_REMINDERS
                 )
-                onShoppingSummary(notifBody)
+                onShoppingSummary(prefix + notifBody)
             }
         }
     }

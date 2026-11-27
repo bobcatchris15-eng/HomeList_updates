@@ -1,618 +1,221 @@
 package com.example.mesh
 
 import android.content.Context
-import android.net.nsd.NsdManager
-import android.net.nsd.NsdServiceInfo
-import android.net.wifi.WifiManager
-import android.os.Build
 import android.util.Log
-import com.example.data.GroceryItemEntity
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
+import com.example.data.GossipMergeResult
+import com.example.data.HomeListDatabase
 import com.example.data.HomeListRepository
-import com.example.data.ReminderEntity
-import com.squareup.moshi.Moshi
-import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import com.example.reminders.LocationReminderManager
+import com.example.reminders.ReminderNotificationHelper
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import java.util.concurrent.TimeUnit
 
-class MeshSyncEngine(
+internal suspend fun <T> MeshTransport.withEndpoint(block: suspend () -> T): T {
+    var started = false
+    try {
+        withContext(NonCancellable) {
+            start()
+            started = true
+        }
+        return block()
+    } finally {
+        if (started) withContext(NonCancellable) { stop() }
+    }
+}
+
+internal class MeshRuntime(
     context: Context,
-    private val repository: HomeListRepository,
-    private val onIncomingReminders: (List<ReminderEntity>) -> Unit,
-    private val onFulfilledShoppingItems: (List<GroceryItemEntity>) -> Unit,
-    private val onHomeWifiPeerSeen: () -> Unit
+    val repository: HomeListRepository,
+    transport: MeshTransport? = null
 ) {
-    private val appContext = context.applicationContext
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val app = context.applicationContext
+    val locationManager = LocationReminderManager(app)
+    val transport = transport ?: IrohMeshTransport(app, repository, ::notifyChanges, ::onHomePath)
+    private val shoppingMessages = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    val shoppingSummaries = shoppingMessages.asSharedFlow()
+    private val syncLock = Mutex()
+    private val requests = Semaphore(3)
 
-    private val moshi: Moshi = Moshi.Builder()
-        .addLast(KotlinJsonAdapterFactory())
-        .build()
-    private val gossipAdapter = moshi.adapter(MeshGossipPayload::class.java)
-    private val healthAdapter = moshi.adapter(NodeHealthPayload::class.java)
-
-    private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(4, TimeUnit.SECONDS)
-        .readTimeout(6, TimeUnit.SECONDS)
-        .writeTimeout(6, TimeUnit.SECONDS)
-        .build()
-
-    private val server = MeshNodeServer(
-        repository = repository,
-        scope = scope,
-        onIncomingReminders = onIncomingReminders,
-        onFulfilledShoppingItems = onFulfilledShoppingItems,
-        onPeerGossipReceived = { remoteIp ->
-            _status.update {
-                it.copy(
-                    lastSyncTimeMs = System.currentTimeMillis(),
-                    lastSyncMessage = "Wi-Fi peer synced"
-                )
-            }
-            if (NetworkAddressDetector.isLanAddress(remoteIp)) {
-                onHomeWifiPeerSeen()
-            }
-        }
-    )
-
-    private val nsdManager: NsdManager? =
-        appContext.getSystemService(Context.NSD_SERVICE) as? NsdManager
-    private var multicastLock: WifiManager.MulticastLock? = null
-    private var registrationListener: NsdManager.RegistrationListener? = null
-    private var discoveryListener: NsdManager.DiscoveryListener? = null
-    private var periodicSyncJob: Job? = null
-    private var registeredServiceName: String? = null
-
-    private val _status = MutableStateFlow(MeshRuntimeStatus())
-    val status: StateFlow<MeshRuntimeStatus> = _status.asStateFlow()
-
-    private val _discoveredNodes = MutableStateFlow<List<DiscoveredMeshNode>>(emptyList())
-    val discoveredNodes: StateFlow<List<DiscoveredMeshNode>> = _discoveredNodes.asStateFlow()
-
-    fun startDiscoveryForOnboarding() {
-        refreshLocalAddresses()
-        startMdnsDiscovery()
+    suspend fun sync(): MeshPassResult = syncLock.withLock {
+        transport.withEndpoint { syncHouseholds() }
     }
 
-    fun startMeshNode() {
-        scope.launch {
-            val config = repository.getConfig() ?: return@launch
-            val boundPort = server.start(config.listenPort)
-            if (boundPort > 0 && boundPort != config.listenPort) {
-                repository.updateConfig { it.copy(listenPort = boundPort) }
-            }
-            val addresses = NetworkAddressDetector.detect()
-            repository.refreshSelfPeerAddresses()
-
-            _status.update {
-                it.copy(
-                    serverRunning = boundPort > 0,
-                    listenPort = if (boundPort > 0) boundPort else config.listenPort,
-                    lanIp = addresses.lanIp,
-                    lastSyncMessage = if (boundPort > 0) "Wi-Fi mesh active" else "Offline (local)"
-                )
-            }
-
-            if (boundPort > 0) {
-                registerMdnsService(config.nodeId, boundPort)
-            }
-            startMdnsDiscovery()
-            startPeriodicWifiSyncLoop()
-            syncMeshNow(silent = true)
-        }
-    }
-
-    fun stopMeshNode() {
-        periodicSyncJob?.cancel()
-        periodicSyncJob = null
-        stopMdnsDiscovery()
-        unregisterMdnsService()
-        server.stop()
-        releaseMulticastLock()
-        _status.update { it.copy(serverRunning = false) }
-    }
-
-    fun refreshLocalAddresses() {
-        scope.launch {
-            val addresses = NetworkAddressDetector.detect()
-            repository.refreshSelfPeerAddresses()
-            _status.update { it.copy(lanIp = addresses.lanIp) }
-        }
-    }
-
-    fun gossipAfterLocalChange() {
-        scope.launch {
-            syncMeshNow(silent = true)
-        }
-    }
-
-    private fun startPeriodicWifiSyncLoop() {
-        periodicSyncJob?.cancel()
-        periodicSyncJob = scope.launch {
-            while (isActive) {
-                delay(WIFI_GOSSIP_INTERVAL_MS)
-                if (repository.getConfig() != null) {
-                    syncMeshNow(silent = true)
-                }
-            }
-        }
-    }
-
-    suspend fun probePeerHealth(host: String, port: Int): Result<NodeHealthPayload> =
-        withContext(Dispatchers.IO) {
-            try {
-                val cleanHost = normalizeHost(host)
-                val req = Request.Builder()
-                    .url("http://$cleanHost:$port/api/v1/health")
-                    .get()
-                    .build()
-                httpClient.newCall(req).execute().use { res ->
-                    val body = res.body?.string().orEmpty()
-                    if (!res.isSuccessful) {
-                        return@withContext Result.failure(IllegalStateException("Peer returned HTTP ${res.code}"))
-                    }
-                    val parsed = healthAdapter.fromJson(body)
-                        ?: return@withContext Result.failure(IllegalStateException("Invalid peer response"))
-                    Result.success(parsed)
-                }
-            } catch (e: Exception) {
-                Result.failure(e)
-            }
-        }
-
-    suspend fun probeHubHealth(rawUrl: String): Result<NodeHealthPayload> =
-        withContext(Dispatchers.IO) {
-            try {
-                val baseUrl = normalizeHubBaseUrl(rawUrl)
-                if (baseUrl.isBlank()) {
-                    return@withContext Result.failure(IllegalArgumentException("Enter a Home Hub URL"))
-                }
-                val req = Request.Builder()
-                    .url("$baseUrl/api/v1/health")
-                    .get()
-                    .build()
-                httpClient.newCall(req).execute().use { res ->
-                    val body = res.body?.string().orEmpty()
-                    if (!res.isSuccessful) {
-                        return@withContext Result.failure(IllegalStateException("Hub returned HTTP ${res.code}"))
-                    }
-                    val parsed = healthAdapter.fromJson(body)
-                        ?: return@withContext Result.failure(IllegalStateException("Invalid Home Hub response"))
-                    Result.success(parsed)
-                }
-            } catch (e: Exception) {
-                Result.failure(e)
-            }
-        }
-
-    suspend fun joinViaPeer(
-        host: String,
-        port: Int,
-        pairingCode: String
-    ): Result<MeshGossipPayload> = withContext(Dispatchers.IO) {
-        try {
-            val trimmed = host.trim()
-            val targetUrl = if (
-                trimmed.startsWith("https://", ignoreCase = true) ||
-                trimmed.startsWith("http://", ignoreCase = true)
-            ) {
-                "${normalizeHubBaseUrl(trimmed)}/api/v1/gossip"
-            } else {
-                val cleanHost = normalizeHost(trimmed)
-                "http://$cleanHost:$port/api/v1/gossip"
-            }
-            val emptyBody = "".toRequestBody(JSON_MEDIA_TYPE)
-            val req = Request.Builder()
-                .url(targetUrl)
-                .header("X-HomeList-Code", pairingCode.trim().uppercase())
-                .post(emptyBody)
-                .build()
-            httpClient.newCall(req).execute().use { res ->
-                val body = res.body?.string().orEmpty()
-                if (res.code == 401) {
-                    return@withContext Result.failure(IllegalArgumentException("Incorrect 6-character pairing code"))
-                }
-                if (!res.isSuccessful) {
-                    return@withContext Result.failure(IllegalStateException("Peer returned HTTP ${res.code}"))
-                }
-                val parsed = gossipAdapter.fromJson(body)
-                    ?: return@withContext Result.failure(IllegalStateException("Could not read household snapshot"))
-                Result.success(parsed)
-            }
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
-    }
-
-    suspend fun syncMeshNow(silent: Boolean = false): Int = withContext(Dispatchers.IO) {
-        val config = repository.getConfig() ?: return@withContext 0
-        val addresses = NetworkAddressDetector.detect()
-        repository.refreshSelfPeerAddresses()
-        _status.update {
-            it.copy(
-                isSyncing = true,
-                lanIp = addresses.lanIp
-            )
-        }
-
-        val payload = repository.buildGossipPayload()
-        if (payload == null) {
-            _status.update { it.copy(isSyncing = false) }
-            return@withContext 0
-        }
-
-        // Gather all candidate home Wi-Fi endpoints: mDNS peers + saved Peer Address Book LAN IPs
-        val targets = linkedSetOf<Pair<String, Int>>()
-        _discoveredNodes.value
-            .filter { it.householdId.isBlank() || it.householdId == config.householdId }
-            .forEach { node ->
-                if (node.host.isNotBlank() && node.host != addresses.lanIp) {
-                    targets.add(node.host to node.port)
-                }
-            }
-
-        val savedPeers = repository.getAllPeers().filter { it.nodeId != config.nodeId }
-        savedPeers.sortedByDescending { it.isFounder }.forEach { peer ->
-            if (peer.lanIp.isNotBlank() && peer.lanIp != addresses.lanIp) {
-                targets.add(peer.lanIp to peer.port)
-            }
-        }
-
-        var syncedCount = 0
-        var sawLanPeer = false
-        var hubSynced = false
-        val jsonBody = gossipAdapter.toJson(payload)
-
-        for ((host, port) in targets) {
-            try {
-                val req = Request.Builder()
-                    .url("http://$host:$port/api/v1/gossip")
-                    .header("X-HomeList-Code", config.pairingCode)
-                    .post(jsonBody.toRequestBody(JSON_MEDIA_TYPE))
-                    .build()
-                httpClient.newCall(req).execute().use { res ->
-                    if (res.isSuccessful) {
-                        val responseText = res.body?.string().orEmpty()
-                        val incoming = gossipAdapter.fromJson(responseText)
-                        if (incoming != null && incoming.householdId == config.householdId) {
-                            val mergeResult = repository.mergeGossipPayload(incoming)
-                            if (mergeResult.newReminders.isNotEmpty()) {
-                                onIncomingReminders(mergeResult.newReminders)
-                            }
-                            if (mergeResult.fulfilledShoppingItems.isNotEmpty()) {
-                                onFulfilledShoppingItems(mergeResult.fulfilledShoppingItems)
-                            }
-                            syncedCount++
-                            if (NetworkAddressDetector.isLanAddress(host)) {
-                                sawLanPeer = true
-                            }
+    private suspend fun syncHouseholds(): MeshPassResult = coroutineScope {
+        val self = transport.localEndpointId()
+        val device = repository.getDeviceConfig()
+        val tasks = repository.getAllHouseholds().flatMap { house ->
+            val id = house.householdId
+            val snapshot = repository.buildGossipPayload(id) ?: return@flatMap emptyList()
+            val targets = buildList {
+                add(house.hubEndpointId)
+                addAll(snapshot.peers.sortedByDescending { it.isFounder }
+                    .filter { it.nodeId != device?.nodeId }.map { it.endpointId })
+            }.filter { it.isNotBlank() && it != self }.distinct()
+            targets.map { endpoint ->
+                async {
+                    requests.withPermit {
+                        try {
+                            val response = transport.exchangeGossip(
+                                endpoint, GossipRequestEnvelope(householdId = id, pairingCode = house.pairingCode, payload = snapshot)
+                            )
+                            val payload = response.payload
+                            if (!response.ok || payload == null || payload.householdId != id) return@withPermit null
+                            notifyChanges(repository.mergeGossipPayload(id, payload))
+                            id to (endpoint == house.hubEndpointId)
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Exception) {
+                            Log.d(TAG, "Peer sync skipped: ${error.javaClass.simpleName}")
+                            null
                         }
                     }
                 }
-            } catch (_: Exception) {
-                // Peer unreachable right now; continue gossiping with remaining peers
             }
         }
-
-        // Optional Home Hub sync (works over Wi-Fi AND away from home on mobile data)
-        val normalizedHub = normalizeHubBaseUrl(config.hubUrl)
-        if (normalizedHub.isNotBlank()) {
-            try {
-                val latestPayload = repository.buildGossipPayload() ?: payload
-                val hubBody = gossipAdapter.toJson(latestPayload)
-                val req = Request.Builder()
-                    .url("$normalizedHub/api/v1/gossip")
-                    .header("X-HomeList-Code", config.pairingCode)
-                    .post(hubBody.toRequestBody(JSON_MEDIA_TYPE))
-                    .build()
-                httpClient.newCall(req).execute().use { res ->
-                    if (res.isSuccessful) {
-                        val responseText = res.body?.string().orEmpty()
-                        val incoming = gossipAdapter.fromJson(responseText)
-                        if (incoming != null &&
-                            (incoming.householdId.isBlank() || incoming.householdId == config.householdId)
-                        ) {
-                            val mergeResult = repository.mergeGossipPayload(incoming)
-                            if (mergeResult.newReminders.isNotEmpty()) {
-                                onIncomingReminders(mergeResult.newReminders)
-                            }
-                            if (mergeResult.fulfilledShoppingItems.isNotEmpty()) {
-                                onFulfilledShoppingItems(mergeResult.fulfilledShoppingItems)
-                            }
-                            hubSynced = true
-                            syncedCount++
-                        }
-                    }
-                }
-            } catch (_: Exception) {
-                // Optional Home Hub unreachable right now; local data & LAN mesh still work seamlessly
-            }
-        }
-
-        if (sawLanPeer) {
-            onHomeWifiPeerSeen()
-        }
-
-        val now = System.currentTimeMillis()
-        val lanSyncedCount = if (hubSynced) syncedCount - 1 else syncedCount
-        _status.update {
-            it.copy(
-                isSyncing = false,
-                activeWifiPeers = _discoveredNodes.value.size,
-                hubConnected = hubSynced,
-                lastSyncTimeMs = if (syncedCount > 0) now else it.lastSyncTimeMs,
-                lastSyncMessage = when {
-                    hubSynced && lanSyncedCount > 0 -> "Synced $lanSyncedCount peer${if (lanSyncedCount == 1) "" else "s"} + Home Hub"
-                    hubSynced -> "Synced via Home Hub"
-                    syncedCount > 0 -> "Synced with $syncedCount peer${if (syncedCount == 1) "" else "s"}"
-                    targets.isEmpty() && normalizedHub.isBlank() -> if (config.isFounder) "Waiting for family phones" else "No peers reachable"
-                    !silent -> "Saved locally • peers offline"
-                    else -> it.lastSyncMessage
-                }
-            )
-        }
-        syncedCount
+        val successes = tasks.awaitAll().filterNotNull()
+        MeshPassResult(
+            successes.groupingBy { it.first }.eachCount(),
+            successes.filter { it.second }.map { it.first }.toSet()
+        )
     }
 
-    private fun acquireMulticastLock() {
-        try {
-            if (multicastLock == null) {
-                val wifi = appContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-                multicastLock = wifi?.createMulticastLock("HomeListMeshNsd")?.apply {
-                    setReferenceCounted(true)
-                }
-            }
-            if (multicastLock?.isHeld == false) {
-                multicastLock?.acquire()
-            }
-        } catch (_: Exception) {
-        }
+    private suspend fun notifyChanges(result: GossipMergeResult) {
+        if (result.newReminders.isEmpty() && result.fulfilledShoppingItems.isEmpty()) return
+        ReminderNotificationHelper.notifyIncomingMeshItems(
+            context = app,
+            newReminders = result.newReminders,
+            fulfilledShoppingItems = result.fulfilledShoppingItems,
+            householdName = result.householdName.takeIf { repository.getAllHouseholds().size > 1 },
+            onShoppingSummary = { shoppingMessages.tryEmit(it) }
+        )
     }
 
-    private fun releaseMulticastLock() {
-        try {
-            if (multicastLock?.isHeld == true) {
-                multicastLock?.release()
-            }
-        } catch (_: Exception) {
-        }
-    }
-
-    private fun registerMdnsService(nodeId: String, port: Int) {
-        val manager = nsdManager ?: return
-        unregisterMdnsService()
-        val shortId = nodeId.take(8)
-        val serviceInfo = NsdServiceInfo().apply {
-            serviceName = "HomeList-$shortId"
-            serviceType = SERVICE_TYPE
-            setPort(port)
-        }
-        val listener = object : NsdManager.RegistrationListener {
-            override fun onServiceRegistered(info: NsdServiceInfo) {
-                registeredServiceName = info.serviceName
-            }
-
-            override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
-                Log.w(TAG, "mDNS registration failed: $errorCode")
-            }
-
-            override fun onServiceUnregistered(serviceInfo: NsdServiceInfo) {
-                registeredServiceName = null
-            }
-
-            override fun onUnregistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
-        }
-        registrationListener = listener
-        try {
-            manager.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, listener)
-        } catch (e: Exception) {
-            Log.w(TAG, "registerService error: ${e.message}")
-        }
-    }
-
-    private fun unregisterMdnsService() {
-        val manager = nsdManager ?: return
-        val listener = registrationListener ?: return
-        registrationListener = null
-        try {
-            manager.unregisterService(listener)
-        } catch (_: Exception) {
-        }
-    }
-
-    private fun startMdnsDiscovery() {
-        val manager = nsdManager ?: return
-        if (discoveryListener != null) return
-        acquireMulticastLock()
-        val listener = object : NsdManager.DiscoveryListener {
-            override fun onDiscoveryStarted(regType: String) {}
-
-            override fun onServiceFound(serviceInfo: NsdServiceInfo) {
-                if (serviceInfo.serviceName == registeredServiceName) return
-                resolveDiscoveredService(manager, serviceInfo)
-            }
-
-            override fun onServiceLost(serviceInfo: NsdServiceInfo) {
-                _discoveredNodes.update { list ->
-                    list.filterNot { it.serviceName == serviceInfo.serviceName }
-                }
-                _status.update { it.copy(activeWifiPeers = _discoveredNodes.value.size) }
-            }
-
-            override fun onDiscoveryStopped(serviceType: String) {}
-
-            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
-                stopMdnsDiscovery()
-            }
-
-            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
-                stopMdnsDiscovery()
-            }
-        }
-        discoveryListener = listener
-        try {
-            manager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
-        } catch (e: Exception) {
-            Log.w(TAG, "discoverServices error: ${e.message}")
-            discoveryListener = null
-        }
-    }
-
-    @Suppress("DEPRECATION")
-    private fun resolveDiscoveredService(manager: NsdManager, serviceInfo: NsdServiceInfo) {
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                manager.registerServiceInfoCallback(
-                    serviceInfo,
-                    { runnable -> scope.launch { runnable.run() } },
-                    object : NsdManager.ServiceInfoCallback {
-                        override fun onServiceInfoCallbackRegistrationFailed(errorCode: Int) {}
-                        override fun onServiceUpdated(info: NsdServiceInfo) {
-                            val host = info.hostAddresses.firstOrNull { !it.isLoopbackAddress }?.hostAddress
-                            if (!host.isNullOrBlank() && info.port > 0) {
-                                handleResolvedPeer(info.serviceName, host, info.port)
-                            }
-                            try {
-                                manager.unregisterServiceInfoCallback(this)
-                            } catch (_: Exception) {
-                            }
-                        }
-
-                        override fun onServiceLost() {}
-                        override fun onServiceInfoCallbackUnregistered() {}
-                    }
-                )
-            } else {
-                manager.resolveService(
-                    serviceInfo,
-                    object : NsdManager.ResolveListener {
-                        override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) {}
-                        override fun onServiceResolved(info: NsdServiceInfo) {
-                            val host = info.host?.hostAddress
-                            if (!host.isNullOrBlank() && info.port > 0) {
-                                handleResolvedPeer(info.serviceName, host, info.port)
-                            }
-                        }
-                    }
-                )
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "resolveDiscoveredService error: ${e.message}")
-        }
-    }
-
-    private fun handleResolvedPeer(serviceName: String, host: String, port: Int) {
-        scope.launch {
-            val selfConfig = repository.getConfig()
-            val health = probePeerHealth(host, port).getOrNull()
-            if (health != null && selfConfig != null && health.nodeId == selfConfig.nodeId) {
-                return@launch // Ignore self broadcast
-            }
-            val node = DiscoveredMeshNode(
-                serviceName = serviceName,
-                host = host,
-                port = port,
-                householdName = health?.householdName ?: "HomeList Phone",
-                householdId = health?.householdId.orEmpty(),
-                displayName = health?.displayName ?: serviceName,
-                deviceType = health?.deviceType ?: "PHONE",
-                isFounder = health?.isFounder ?: false
-            )
-            _discoveredNodes.update { existing ->
-                (existing.filterNot { it.host == host && it.port == port } + node)
-            }
-            _status.update { it.copy(activeWifiPeers = _discoveredNodes.value.size) }
-
-            // If we already belong to this household, immediately trigger Wi-Fi gossip!
-            if (selfConfig != null &&
-                (node.householdId.isBlank() || node.householdId == selfConfig.householdId)
-            ) {
-                onHomeWifiPeerSeen()
-                syncMeshNow(silent = true)
-            }
-        }
-    }
-
-    private fun stopMdnsDiscovery() {
-        val manager = nsdManager ?: return
-        val listener = discoveryListener ?: return
-        discoveryListener = null
-        try {
-            manager.stopServiceDiscovery(listener)
-        } catch (_: Exception) {
-        }
+    private suspend fun onHomePath(householdId: String) {
+        val house = repository.getHousehold(householdId) ?: return
+        locationManager.evaluateHomeWifiArrival(
+            repository.getAllPlaces(householdId), repository.getAllReminders(householdId), house.selfMemberId
+        ).forEach { repository.markReminderFired(it) }
     }
 
     companion object {
-        private const val TAG = "MeshSyncEngine"
-        private const val WIFI_GOSSIP_INTERVAL_MS = 2 * 60_000L
-        const val SERVICE_TYPE = "_homelist._tcp."
-        private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+        private const val TAG = "HomeListMesh"
+        @Volatile private var instance: MeshRuntime? = null
 
-        fun normalizeHost(raw: String): String {
-            return raw.trim()
-                .removePrefix("http://")
-                .removePrefix("https://")
-                .removePrefix("homelist://")
-                .substringBefore("/")
-                .substringBefore("?")
-                .substringBefore(":")
-                .trim()
+        fun get(context: Context): MeshRuntime = instance ?: synchronized(this) {
+            instance ?: MeshRuntime(
+                context, HomeListRepository(HomeListDatabase.getInstance(context.applicationContext))
+            ).also { instance = it }
         }
+    }
+}
 
-        fun normalizeHubBaseUrl(raw: String): String {
-            val trimmed = raw.trim().trimEnd('/')
-            if (trimmed.isBlank()) return ""
-            val withScheme = when {
-                trimmed.startsWith("https://", ignoreCase = true) -> trimmed
-                trimmed.startsWith("http://", ignoreCase = true) -> trimmed
-                else -> {
-                    val hostPart = trimmed.substringBefore("/")
-                    val looksLikeLocalIp = hostPart.substringBefore(":").all { it.isDigit() || it == '.' }
-                    if (looksLikeLocalIp) {
-                        if (":" in hostPart) "http://$trimmed" else "http://$trimmed:8765"
-                    } else {
-                        "https://$trimmed"
+internal data class MeshPassResult(val peerCounts: Map<String, Int>, val connectedHubs: Set<String>) {
+    val successCount: Int get() = peerCounts.values.sum()
+}
+
+internal class MeshSyncEngine(private val runtime: MeshRuntime) : DefaultLifecycleObserver {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val foreground = MutableStateFlow(false)
+    private val _status = MutableStateFlow(MeshRuntimeStatus())
+    val status = _status.asStateFlow()
+    private val lifecycle = ProcessLifecycleOwner.get().lifecycle
+    private val foregroundWorker = scope.launch {
+        foreground.collectLatest { isForeground ->
+            if (!isForeground) return@collectLatest
+            while (true) {
+                try {
+                    runtime.transport.withEndpoint {
+                        _status.update { it.copy(isOnline = true) }
+                        while (true) {
+                            syncMeshNow()
+                            delay(60_000)
+                        }
                     }
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    _status.update { it.copy(lastSyncMessage = "Could not start peer sync") }
+                } finally {
+                    _status.update { it.copy(isOnline = false, connectedHubs = emptySet()) }
                 }
+                delay(60_000)
             }
-            return withScheme
-                .removeSuffix("/api/v1/gossip")
-                .removeSuffix("/api/v1/health")
-                .trimEnd('/')
         }
+    }
+    private var pendingSync: kotlinx.coroutines.Job? = null
 
-        fun parsePairingUri(input: String): Triple<String, Int, String>? {
-            val trimmed = input.trim()
-            if (!trimmed.startsWith("homelist://", ignoreCase = true)) return null
-            val withoutScheme = trimmed.substringAfter("://")
-            val hostPort = withoutScheme.substringBefore("?")
-            val query = withoutScheme.substringAfter("?", "")
-            val host = hostPort.substringBefore(":")
-            val port = hostPort.substringAfter(":", "8765").toIntOrNull() ?: 8765
-            val code = query.split("&")
-                .mapNotNull { kv ->
-                    val parts = kv.split("=")
-                    if (parts.size == 2 && parts[0].equals("code", ignoreCase = true)) parts[1] else null
-                }
-                .firstOrNull()
-                ?.uppercase()
-                .orEmpty()
-            return if (host.isNotBlank()) Triple(host, port, code) else null
+    init {
+        lifecycle.addObserver(this)
+    }
+
+    override fun onStart(owner: LifecycleOwner) { foreground.value = true }
+    override fun onStop(owner: LifecycleOwner) { foreground.value = false }
+
+    fun close() {
+        lifecycle.removeObserver(this)
+        foregroundWorker.cancel()
+        pendingSync?.cancel()
+    }
+
+    fun gossipAfterLocalChange() {
+        pendingSync?.cancel()
+        pendingSync = scope.launch {
+            delay(300)
+            if (foreground.value) syncMeshNow()
         }
+    }
+
+    suspend fun syncMeshNow(householdId: String? = null): Int {
+        _status.update { it.copy(isSyncing = true, lastSyncMessage = "Syncing households...") }
+        return try {
+            val result = runtime.sync()
+            _status.update { it.copy(
+                lastSyncMessage = if (result.successCount == 0) "No peers reached" else "Synced with ${result.successCount} peer connections",
+                connectedHubs = result.connectedHubs
+            ) }
+            if (householdId == null) result.successCount else result.peerCounts[householdId] ?: 0
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            _status.update { it.copy(lastSyncMessage = "Peer sync unavailable") }
+            0
+        } finally {
+            _status.update { it.copy(isSyncing = false) }
+        }
+    }
+
+    suspend fun joinViaEndpoint(invite: HouseholdInvite): MeshGossipPayload = runtime.transport.withEndpoint {
+        val response = runtime.transport.exchangeGossip(
+            invite.endpointId, GossipRequestEnvelope(householdId = invite.householdId, pairingCode = invite.pairingCode)
+        )
+        response.payload?.takeIf { response.ok && it.householdId == invite.householdId }
+            ?: error(when (response.error) {
+                "invalid_pairing_code" -> "The pairing code was rejected. Ask for a fresh invite."
+                "unknown_household" -> "The peer no longer hosts this household."
+                else -> "Could not join the household. Check the invite and try again."
+            })
     }
 }

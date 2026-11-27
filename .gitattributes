@@ -1,0 +1,2 @@
+scripts/build-iroh-android.sh text eol=lf
+scripts/sign-rotated-apk.sh text eol=lf

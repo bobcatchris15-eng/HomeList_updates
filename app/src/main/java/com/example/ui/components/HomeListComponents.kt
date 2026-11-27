@@ -246,7 +246,7 @@ fun MeshStatusPill(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val isLive = (status.serverRunning && status.activeWifiPeers > 0) || status.hubConnected
+    val isLive = status.isOnline
     val container = if (isLive) {
         MaterialTheme.colorScheme.secondaryContainer
     } else {
@@ -259,10 +259,7 @@ fun MeshStatusPill(
     }
     val label = when {
         status.isSyncing -> "Syncing..."
-        status.activeWifiPeers > 0 && status.hubConnected -> "Wi-Fi + Hub"
-        status.activeWifiPeers > 0 -> "Wi-Fi • ${status.activeWifiPeers} peer${if (status.activeWifiPeers == 1) "" else "s"}"
-        status.hubConnected -> "Home Hub"
-        status.serverRunning -> "Wi-Fi • ${peerCount} node${if (peerCount == 1) "" else "s"}"
+        status.isOnline -> "Peers · $peerCount"
         else -> "Local offline"
     }
 
@@ -281,7 +278,7 @@ fun MeshStatusPill(
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Icon(
-                imageVector = if (status.activeWifiPeers > 0) Icons.Outlined.Wifi else Icons.Outlined.Devices,
+                imageVector = Icons.Outlined.Devices,
                 contentDescription = "Mesh status",
                 tint = contentColor,
                 modifier = Modifier.size(15.dp)
