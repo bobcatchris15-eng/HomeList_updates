@@ -167,9 +167,16 @@ jobs:
             "-Dorg.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=768m -Djava.awt.headless=true -Dfile.encoding=UTF-8" \
             "-Dorg.gradle.workers.max=2"
 
+          INPUT_APK=app/build/outputs/apk/release/app-release.apk
+          manifest=$("$ANDROID_HOME/build-tools/36.0.0/aapt2" dump xmltree "$INPUT_APK" --file AndroidManifest.xml)
+          if grep -Fq '.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION' <<< "$manifest"; then
+            echo "::error::The AndroidX receiver permission blocks upgrades from v1.0.6 after signing key rotation."
+            exit 1
+          fi
+
           OUT_APK="HomeList-$RELEASE_TAG.apk"
           CERT_SHA256=$(bash scripts/sign-rotated-apk.sh \
-            app/build/outputs/apk/release/app-release.apk "$OUT_APK" "$signing_dir/lineage.bin" \
+            "$INPUT_APK" "$OUT_APK" "$signing_dir/lineage.bin" \
             054c57c9046885c5d409108649bf00297f5eee27df9fd7e00a6c88134622608e)
           echo "signed_mode=rotated-release" >> "$GITHUB_OUTPUT"
           echo "cert_sha256=$CERT_SHA256" >> "$GITHUB_OUTPUT"
@@ -194,6 +201,6 @@ jobs:
           body: |
             HomeList release (`${{ steps.build.outputs.signed_mode }}` signed, `versionCode: ${{ steps.version.outputs.code }}`).
 
-            - **Android phones**: The APK supports updates from the original HomeList CI signer on Android 9 and newer. Phones auto-check this repository nightly.
+            - **Android phones**: Install over the official v1.0.6 APK or a later HomeList release to keep your data. Phones auto-check this repository nightly.
             - **Signing SHA-256**: `${{ steps.build.outputs.cert_sha256 }}`
             - **Windows Home Hub (optional)**: Download the `.zip` asset below (or run `Update-HomeListHub.bat`). The Windows Hub also checks this same release URL nightly.
